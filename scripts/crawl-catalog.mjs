@@ -84,13 +84,43 @@ async function readPrevious() {
 }
 
 async function visibleLoadButton(page) {
-  const buttons = page.getByRole("button", { name: /继续加载报价/ });
+  const buttons = page.getByRole("button", { name: /(?:继续加载报价|加载更多报价)/ });
   const count = await buttons.count();
   for (let index = 0; index < count; index += 1) {
     const candidate = buttons.nth(index);
-    if (await candidate.isVisible().catch(() => false)) return candidate;
+    const label = (await candidate.textContent().catch(() => "")) ?? "";
+    const ready = !/正在|加载中/.test(label) && await candidate.isEnabled().catch(() => false);
+    if (ready && await candidate.isVisible().catch(() => false)) return candidate;
   }
   return null;
+}
+
+async function extractRawOffers(page) {
+  return page.locator("table tbody tr").evaluateAll((rows) => rows.map((row) => {
+    const cells = [...row.querySelectorAll("td")];
+    if (cells.length < 5) return null;
+    const stockText = cells[0]?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+    const channelCell = cells[1];
+    const productCell = cells[2];
+    const priceCell = cells[3];
+    const dateCell = cells[4];
+    const actionCell = cells.find((cell) => /前往购买|查看|购买/.test(cell.textContent ?? "")) ?? cells.at(-2) ?? cells.at(-1);
+    const channelLinks = [...(channelCell?.querySelectorAll("a[href]") ?? [])];
+    const shopLink = channelLinks.find((anchor) => (anchor.textContent ?? "").trim() || /店铺主页/.test(anchor.getAttribute("aria-label") ?? ""));
+    const purchaseLink = [...(actionCell?.querySelectorAll("a[href]") ?? [])].find((anchor) => /前往购买|查看|购买/.test(anchor.textContent ?? ""));
+    const merchantFromAria = shopLink?.getAttribute("aria-label")?.match(/前往(.+?)店铺主页/)?.[1];
+    const merchant = merchantFromAria || (shopLink?.textContent ?? "").replace(/\s+/g, " ").trim() || (channelCell?.textContent ?? "").replace(/Image|最低价渠道.*|收录.*|公开运营.*/g, " ").replace(/\s+/g, " ").trim();
+    const productName = (productCell?.getAttribute("title") || productCell?.getAttribute("aria-label") || productCell?.textContent || "").replace(/^原始商品名[：:]?\s*/, "").replace(/同名报价\s*\d+\s*条/g, "").replace(/\s+/g, " ").trim();
+    return {
+      merchant,
+      productName,
+      stockText,
+      priceText: priceCell?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+      updatedText: dateCell?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+      purchaseUrl: purchaseLink?.href ?? null,
+      shopUrl: shopLink?.href ?? null,
+    };
+  }).filter(Boolean));
 }
 
 async function discoverCategory(context, definition) {
@@ -98,20 +128,42 @@ async function discoverCategory(context, definition) {
   try {
     await page.goto(definition.url, { waitUntil: "domcontentloaded", timeout: 90_000 });
     await page.waitForTimeout(1_200);
+    const rawOfferMap = new Map();
+    const collectVisibleOffers = async () => {
+      const batch = await extractRawOffers(page);
+      for (const offer of batch) {
+        const key = offer.purchaseUrl || `${offer.merchant}|${offer.productName}|${offer.priceText}`;
+        rawOfferMap.set(key, offer);
+      }
+      return rawOfferMap.size;
+    };
+    await collectVisibleOffers();
     let clickCount = 0;
     let stagnant = 0;
     while (clickCount < maxLoadClicks && stagnant < 3) {
       const button = await visibleLoadButton(page);
       if (!button) break;
       const before = await page.locator("table tbody tr").count();
+      const beforeCollected = rawOfferMap.size;
       const beforeLabel = (await button.textContent().catch(() => "")) ?? "";
       await button.scrollIntoViewIfNeeded().catch(() => undefined);
-      await button.click({ timeout: 12_000 }).catch(() => undefined);
-      await page.waitForTimeout(900);
+      const clicked = await button.click({ timeout: 12_000 }).then(() => true).catch(() => false);
+      if (!clicked) {
+        stagnant += 1;
+        continue;
+      }
+      await page.waitForFunction(({ label, rowCount }) => {
+        const buttonTexts = [...document.querySelectorAll("button")].map((node) => node.textContent?.trim() ?? "");
+        const loading = buttonTexts.some((text) => /正在.*加载|加载中/.test(text));
+        const rows = document.querySelectorAll("table tbody tr").length;
+        return !loading && (rows !== rowCount || !buttonTexts.includes(label));
+      }, { label: beforeLabel, rowCount: before }, { timeout: 35_000 }).catch(() => undefined);
+      await page.waitForTimeout(250);
       const after = await page.locator("table tbody tr").count();
+      const afterCollected = await collectVisibleOffers();
       const nextButton = await visibleLoadButton(page);
       const afterLabel = nextButton ? ((await nextButton.textContent().catch(() => "")) ?? "") : "complete";
-      stagnant = after > before || afterLabel !== beforeLabel ? 0 : stagnant + 1;
+      stagnant = afterCollected > beforeCollected || after > before || afterLabel !== beforeLabel ? 0 : stagnant + 1;
       clickCount += 1;
     }
 
@@ -119,31 +171,7 @@ async function discoverCategory(context, definition) {
     const summaryMatch = bodyText.match(/([\d,]+)\s*条报价\s*[·•]\s*([\d,]+)\s*有货/);
     const total = summaryMatch ? Number(summaryMatch[1].replaceAll(",", "")) : definition.fallbackTotal;
     const inStock = summaryMatch ? Number(summaryMatch[2].replaceAll(",", "")) : definition.fallbackInStock;
-    const rawOffers = await page.locator("table tbody tr").evaluateAll((rows) => rows.map((row) => {
-      const cells = [...row.querySelectorAll("td")];
-      if (cells.length < 5) return null;
-      const stockText = cells[0]?.textContent?.replace(/\s+/g, " ").trim() ?? "";
-      const channelCell = cells[1];
-      const productCell = cells[2];
-      const priceCell = cells[3];
-      const dateCell = cells[4];
-      const actionCell = cells.find((cell) => /前往购买|查看|购买/.test(cell.textContent ?? "")) ?? cells.at(-2) ?? cells.at(-1);
-      const channelLinks = [...(channelCell?.querySelectorAll("a[href]") ?? [])];
-      const shopLink = channelLinks.find((anchor) => (anchor.textContent ?? "").trim() || /店铺主页/.test(anchor.getAttribute("aria-label") ?? ""));
-      const purchaseLink = [...(actionCell?.querySelectorAll("a[href]") ?? [])].find((anchor) => /前往购买|查看|购买/.test(anchor.textContent ?? ""));
-      const merchantFromAria = shopLink?.getAttribute("aria-label")?.match(/前往(.+?)店铺主页/)?.[1];
-      const merchant = merchantFromAria || (shopLink?.textContent ?? "").replace(/\s+/g, " ").trim() || (channelCell?.textContent ?? "").replace(/Image|最低价渠道.*|收录.*|公开运营.*/g, " ").replace(/\s+/g, " ").trim();
-      const productName = (productCell?.getAttribute("title") || productCell?.getAttribute("aria-label") || productCell?.textContent || "").replace(/^原始商品名[：:]?\s*/, "").replace(/同名报价\s*\d+\s*条/g, "").replace(/\s+/g, " ").trim();
-      return {
-        merchant,
-        productName,
-        stockText,
-        priceText: priceCell?.textContent?.replace(/\s+/g, " ").trim() ?? "",
-        updatedText: dateCell?.textContent?.replace(/\s+/g, " ").trim() ?? "",
-        purchaseUrl: purchaseLink?.href ?? null,
-        shopUrl: shopLink?.href ?? null,
-      };
-    }).filter(Boolean));
+    const rawOffers = [...rawOfferMap.values()];
 
     const seen = new Set();
     const now = new Date().toISOString();
