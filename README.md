@@ -1,113 +1,65 @@
-# vinext-starter
+# 链动小铺 · ChatGPT 全网渠道雷达
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+一个面向 ChatGPT Plus 成品号、正价代充、Go / Pro 与 Business（原 Team）席位的价格和库存监测站。
 
-## Prerequisites
+网站采用两层数据模型：
 
-- Node.js `>=22.13.0`
-- Linux with `flock`, `curl`, and GNU `timeout`
+- **聚合索引**：同步公开目录中的 8 个 ChatGPT 标准品类，展示报价渠道总量、有货量、首屏报价组和原商品跳转链接。
+- **独立复核**：服务端直接访问登记商品页；第三方商品只有同时识别到价格、正库存与可用下单入口，才进入“确认可购买”和最低价推荐。
 
-## Sites Lifecycle
+这两个层级不会混用。聚合站标记“有货”不代表本站已验证交付，长期最低价也只统计独立复核通过的快照。
 
-The Sites lifecycle CLI runs the locked dependency install before returning this checkout. Edit the source under `app/`, then checkpoint when a coherent milestone is ready to inspect or share. The remote Sites builder runs `npm run build` against the pushed commit. Do not repeat install or build as a normal pre-checkpoint step.
+## 功能
 
-This starter does not use `wrangler.jsonc`.
+- 2,000+ ChatGPT 报价渠道规模总览（实时返回失败时明确标记为公开基线）
+- 8 个标准品类：Plus 试用、Team / Business、Plus 正价代充、普号、Go、Pro 20x、Pro 5x、周边服务
+- 可搜索、筛选、分页的商家 / 商品目录
+- 每条已加载报价保留店铺主页、原商品页和来源页
+- 原站价格、库存与购买入口双信号复核
+- D1 价格快照、历史最低价与最近 12 次可信价格轨迹
+- Plus 成品号和 Business / Team 席位差异对比
+- 移动端卡片视图、核验证据抽屉和离站风险确认
 
-`install:ci` is intentionally a single, non-retrying `npm ci`. It refuses a concurrent install for the same project, consumes a matching image-seeded npm cache with `--prefer-offline` while retaining registry fallback for a missing cache object, otherwise downloads and verifies the complete vinext tarball recorded in `package-lock.json`, limits npm to one socket, and terminates a stalled install. `build` applies a short timeout. These helpers target Linux and use GNU `timeout`; they are not native macOS scripts.
+## 技术栈
 
-Scripts that need writable project-scoped home, npm, XDG, and temporary paths use `scripts/sites-env.sh`. The `dev` and `start` scripts honor the caller's runtime environment and keep Wrangler logs inside the checkout. The generated `.sites-runtime/` directory is disposable and ignored by Git.
+- Next.js 16 / React 19 / TypeScript
+- Cloudflare Workers + D1
+- Tailwind CSS 4 + shadcn/ui
+- Vite / vinext
 
-## Included Shape
+## 本地运行
 
-- edit site code under `app/`
-- `app/chatgpt-auth.ts` provides optional dispatch-owned ChatGPT sign-in helpers
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/index.ts` reads the D1 binding from the Cloudflare Worker environment
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+要求 Node.js `>=22.13.0`。
 
-## Workspace Auth Headers
-
-OpenAI workspace sites can read the current user's email from
-`oai-authenticated-user-email`.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```bash
+npm ci
+npm run dev
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+生产构建：
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+```bash
+npm run build
+```
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- In a Server Component, start sign-in with
-  `<a href={chatGPTSignInPath(returnTo)} target="_top">`. The auth helper
-  module is server-only; do not import it into a Client Component.
-- Do not use `fetch`, XHR, a client-side router, or a framework link that can
-  prefetch the sign-in route. SIWC must start as a top-level navigation.
-- Never request the AuthAPI authorization endpoint directly. The dispatch-owned
-  `/signin-with-chatgpt` route must start the SIWC flow.
-- Use `chatGPTSignOutPath(returnTo)` for browser sign-out links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+## 数据边界
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
+- 公开目录的“渠道”可能包含同一商家多规格、同名报价组或同平台多店铺，不等于相同数量的独立域名。
+- 上游页面只能公开返回的条目才会出现在逐条跳转列表；不会为未返回的条目生成或猜测链接。
+- 登录、验证码、反爬、超时或页面结构变化会使来源降级为“无法确认”。
+- 本项目不参与交易、不担保交付，也不建议向第三方提供常用账号密码、验证码或恢复邮箱。
 
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
+## 主要目录
 
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
+```text
+app/api/catalog/route.ts  聚合目录实时接口
+app/api/monitor/route.ts  独立复核与快照接口
+app/radar-dashboard.tsx   仪表盘与交互
+lib/catalog.ts            品类注册、目录解析与安全链接处理
+lib/monitor.ts            原站复核规则
+db/history.ts             D1 历史价格查询
+```
 
-## Diagnostic Commands
+## 合规扩展到全量逐条数据
 
-- `npm run install:ci`: perform the one bounded lockfile install
-- `npm run dev`: start the Vite/Vinext development server
-- `npm run build`: build the deployable Sites artifact
-- `npm run start`: start the built Vinext application
-- `npm test`: build and verify the rendered development-preview metadata
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-Use build commands for targeted diagnosis after a remote failure, not as part of the normal checkpoint path.
-
-The timeout defaults can be overridden for a controlled canary with `SITES_INSTALL_TIMEOUT`, `SITES_INSTALL_KILL_AFTER`, `SITES_BUILD_TIMEOUT`, and `SITES_BUILD_KILL_AFTER`. A timeout fails the command; the helpers never retry an unchanged install or build.
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+若要把每个品类的全部报价都展示为逐条记录，应接入上游授权 API、平台合作数据源或商家主动提交接口。当前实现保留了清晰的数据层级与适配器边界，可以继续接入这些来源，而无需把渠道总数伪装成已抓取链接数。

@@ -22,6 +22,7 @@ export type Offer = {
   latencyMs: number | null;
   historicalLowCny: number | null;
   previousPriceCny: number | null;
+  priceHistoryCny: number[];
   isOfficial?: boolean;
 };
 
@@ -289,6 +290,7 @@ function emptyOffer(source: SourceDefinition, checkedAt: string | null = null): 
     latencyMs: null,
     historicalLowCny: null,
     previousPriceCny: null,
+    priceHistoryCny: [],
     isOfficial: source.isOfficial,
   };
 }

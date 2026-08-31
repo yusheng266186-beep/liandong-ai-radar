@@ -17,6 +17,7 @@ type SnapshotRow = {
 
 type MinimumRow = { source_id: string; historical_low_cny: number | null };
 type PreviousRow = { source_id: string; price_cny: number | null };
+type HistoryRow = { source_id: string; price_cny: number };
 
 function safeEvidence(value: string) {
   try {
@@ -83,13 +84,35 @@ export async function readLatestOffers(): Promise<Offer[]> {
     ) ranked
     WHERE row_number = 2
   `);
+  const history = env.DB.prepare(`
+    SELECT source_id, price_cny
+    FROM (
+      SELECT
+        source_id,
+        price_cny,
+        id,
+        ROW_NUMBER() OVER (PARTITION BY source_id ORDER BY id DESC) AS row_number
+      FROM price_snapshots
+      WHERE price_cny IS NOT NULL
+        AND stock_status = 'in_stock'
+        AND verification IN ('double_signal', 'official')
+    ) ranked
+    WHERE row_number <= 12
+    ORDER BY source_id ASC, id ASC
+  `);
 
-  const [latestResult, minimumResult, previousResult] = await env.DB.batch([latest, minimums, previous]);
+  const [latestResult, minimumResult, previousResult, historyResult] = await env.DB.batch([latest, minimums, previous, history]);
   const latestRows = (latestResult.results ?? []) as SnapshotRow[];
   if (!latestRows.length) return emptyOffers();
 
   const minimumMap = new Map(((minimumResult.results ?? []) as MinimumRow[]).map((row) => [row.source_id, row.historical_low_cny]));
   const previousMap = new Map(((previousResult.results ?? []) as PreviousRow[]).map((row) => [row.source_id, row.price_cny]));
+  const historyMap = new Map<string, number[]>();
+  for (const row of (historyResult.results ?? []) as HistoryRow[]) {
+    const values = historyMap.get(row.source_id) ?? [];
+    values.push(row.price_cny);
+    historyMap.set(row.source_id, values);
+  }
   const latestMap = new Map(latestRows.map((row) => [row.source_id, row]));
 
   return sources.map((source) => {
@@ -114,6 +137,7 @@ export async function readLatestOffers(): Promise<Offer[]> {
       latencyMs: row.latency_ms,
       historicalLowCny: minimumMap.get(source.id) ?? null,
       previousPriceCny: previousMap.get(source.id) ?? null,
+      priceHistoryCny: historyMap.get(source.id) ?? [],
       isOfficial: source.isOfficial,
     };
   });
