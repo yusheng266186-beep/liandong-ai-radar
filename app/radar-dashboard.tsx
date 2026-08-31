@@ -345,24 +345,36 @@ function OfferTable({ offers }: { offers: Offer[] }) {
 
 function ComparisonGrid() {
   const items = [
+    { label: "官方价格基准", plus: "US$20 / 月；个人套餐", business: "标准席 US$25 月付或 US$20 年付；至少 2 席" },
     { label: "账号归属", plus: "商家提供账号，归属链不透明", business: "使用自己的账号加入他人工作区" },
     { label: "最大风险", plus: "邮箱找回、共享挤号、风控封禁", business: "工作区所有者可随时移除席位" },
     { label: "隐私边界", plus: "历史会话可能留在交付账号内", business: "工作区数据受管理员设置约束" },
+    { label: "官方数据政策", plus: "个人数据控制设置为准", business: "业务数据默认不用于模型训练" },
+    { label: "管理能力", plus: "无工作区管理控制", business: "拥有席位、成员与工作区管理能力" },
     { label: "稳定性", plus: "取决于账号来源与续费方式", business: "取决于工作区持续付费与管理员" },
     { label: "适合谁", plus: "只建议短期、低敏感用途", business: "真正同组织且需要协作的成员" },
     { label: "本站结论", plus: "高风险；优先本人账号官方订阅", business: "非自有组织席位同样高风险" },
   ];
 
   return (
-    <div className="compare-wrap">
-      <div className="compare-head compare-label">比较维度</div>
-      <div className="compare-head"><span className="plan-icon"><Sparkles /></span><div><strong>Plus 成品账号</strong><span>第三方交付登录凭据</span></div></div>
-      <div className="compare-head"><span className="plan-icon business"><LockKeyhole /></span><div><strong>Business / Team 席位</strong><span>加入他人管理的工作区</span></div></div>
-      {items.map((item) => (
-        <div className="compare-row" key={item.label}>
-          <div className="compare-label">{item.label}</div><div>{item.plus}</div><div>{item.business}</div>
-        </div>
-      ))}
+    <div>
+      <div className="compare-wrap">
+        <div className="compare-head compare-label">比较维度</div>
+        <div className="compare-head"><span className="plan-icon"><Sparkles /></span><div><strong>Plus 成品账号</strong><span>第三方交付登录凭据</span></div></div>
+        <div className="compare-head"><span className="plan-icon business"><LockKeyhole /></span><div><strong>Business / Team 席位</strong><span>加入他人管理的工作区</span></div></div>
+        {items.map((item) => (
+          <div className="compare-row" key={item.label}>
+            <div className="compare-label">{item.label}</div><div>{item.plus}</div><div>{item.business}</div>
+          </div>
+        ))}
+      </div>
+      <div className="compare-sources">
+        官方基准：<a href="https://help.openai.com/en/articles/6950777-what-is-chatgpt-plus" target="_blank" rel="noreferrer">Plus 说明</a>
+        <span>·</span>
+        <a href="https://help.openai.com/en/articles/8792828-what-is-chatgpt-business" target="_blank" rel="noreferrer">Business 说明</a>
+        <span>·</span>
+        <a href="https://help.openai.com/en/articles/12111915-chatgpt-business-rename-faq" target="_blank" rel="noreferrer">Team 更名说明</a>
+      </div>
     </div>
   );
 }
@@ -397,7 +409,11 @@ export function RadarDashboard() {
       const response = await fetch("/api/monitor", { cache: "no-store" });
       if (!response.ok) throw new Error("snapshot unavailable");
       const payload = (await response.json()) as MonitorPayload;
-      if (payload.offers?.length) setData(payload);
+      if (payload.offers?.length) {
+        setData(payload);
+        const stale = !payload.checkedAt || Date.now() - new Date(payload.checkedAt).getTime() > 24 * 60 * 60 * 1000;
+        if (stale) void refreshLive();
+      }
     } catch {
       // Keep the explicit waiting state when the server has no snapshot yet.
     } finally {
@@ -405,7 +421,11 @@ export function RadarDashboard() {
     }
   }
 
-  useEffect(() => { void loadSnapshot(); }, []);
+  useEffect(() => {
+    void loadSnapshot();
+    const dailyRefresh = window.setInterval(() => { void refreshLive(); }, 24 * 60 * 60 * 1000);
+    return () => window.clearInterval(dailyRefresh);
+  }, []);
 
   async function refreshLive() {
     setLoading(true);

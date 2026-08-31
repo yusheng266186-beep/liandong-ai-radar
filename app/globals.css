@@ -176,6 +176,9 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .compare-row > div { min-height: 58px; padding: 15px 18px; display: flex; align-items: center; border-bottom: 1px solid var(--line); color: #56606f; font-size: 11px; line-height: 1.55; }
 .compare-row > div:nth-child(3n) { border-left: 1px solid var(--line); }
 .compare-label { color: #838a95 !important; font-size: 10px !important; font-weight: 750; }
+.compare-sources { padding: 0 26px 22px; display: flex; flex-wrap: wrap; gap: 7px; color: #9197a1; font-size: 9px; }
+.compare-sources a { color: #4a607b; font-weight: 700; text-decoration: none; border-bottom: 1px solid #bcc5cf; }
+.compare-sources a:hover { color: var(--ink); }
 
 .method-grid { padding: 26px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .method-card { min-height: 175px; padding: 22px; background: #f1f0ea; border: 1px solid #e0dfd7; border-radius: 11px; }
