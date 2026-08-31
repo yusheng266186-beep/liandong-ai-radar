@@ -1,5 +1,7 @@
 # 链动小铺 · AI 账号行情台
 
+[![Refresh data and deploy Pages](https://github.com/yusheng266186-beep/liandong-ai-radar/actions/workflows/pages-next.yml/badge.svg)](https://github.com/yusheng266186-beep/liandong-ai-radar/actions/workflows/pages-next.yml)
+
 公开、可审计、持续自动更新的 AI 数字商品价格与库存监测站。站内完成搜索、筛选、排序、比较和证据核对；购买按钮直接打开原商家商品页，不把用户送回聚合站。
 
 - 在线站点：<https://yusheng266186-beep.github.io/liandong-ai-radar/>
