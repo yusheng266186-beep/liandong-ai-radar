@@ -35,8 +35,10 @@ import {
 type Verification = "direct" | "feed" | "reachable" | "indexed" | "failed";
 type StockStatus = "in_stock" | "out_of_stock" | "unverified";
 type FreshnessStatus = "live" | "fresh" | "aging" | "stale" | "unknown";
+type PurchaseStatus = "confirmed" | "channel_candidate" | "unavailable" | "unverified";
+type ProductForm = "finished_account" | "seat_membership" | "recharge" | "activation_code" | "shared_access" | "mirror_access" | "web_account" | "service" | "other";
 
-type PricePoint = { at: string; priceCny: number; evidence?: Verification };
+type PricePoint = { at: string; priceCny: number; evidence?: Verification; purchaseStatus?: PurchaseStatus };
 type StockPoint = { at: string; stockCount: number; status: StockStatus };
 
 type CatalogOffer = {
@@ -49,6 +51,8 @@ type CatalogOffer = {
   previousPriceCny?: number | null;
   historicalLowCny?: number | null;
   trustedLowCny?: number | null;
+  channelLowCny?: number | null;
+  strictLowCny?: number | null;
   stockStatus: StockStatus;
   stockCount: number | null;
   purchaseUrl: string;
@@ -64,6 +68,20 @@ type CatalogOffer = {
   freshnessStatus?: FreshnessStatus;
   availabilityConfidence?: number;
   deliveryType: string;
+  productForm?: ProductForm;
+  purchaseStatus?: PurchaseStatus;
+  purchaseEvidence?: {
+    planMatched: boolean;
+    priceMatched: boolean;
+    stockExplicit: boolean;
+    entryUrlValid: boolean;
+    checkoutActionConfirmed: boolean;
+  };
+  sourceFilterTags?: string[];
+  collectorKind?: string;
+  sourceConfidence?: number | null;
+  sourcePriority?: number | null;
+  sourceExpiresAt?: string | null;
   tags: string[];
   minPurchase: number | null;
   firstSeenAt: string;
@@ -83,16 +101,21 @@ type CatalogCategory = {
   description: string;
   tags: string[];
   offerCount: number;
+  loadedCount?: number;
+  sourceComplete?: boolean;
   inStockCount: number;
   verifiedCount: number;
   directVerifiedCount?: number;
   feedVerifiedCount?: number;
   floorPriceCny: number | null;
+  channelFloorPriceCny?: number | null;
+  strictFloorPriceCny?: number | null;
+  finishedAccountFloorPriceCny?: number | null;
 };
 
 type RunDelta = {
   id: string;
-  type: "price_down" | "price_up" | "restocked" | "sold_out" | "new";
+  type: "price_down" | "price_up" | "restocked" | "sold_out" | "new" | "purchase_confirmed" | "purchase_unconfirmed" | "source_recovered" | "source_failed";
   merchant: string;
   productName: string;
   before: string;
@@ -119,15 +142,36 @@ type CatalogData = {
     domains: number;
     failedSources: number;
     blockedDomains?: number;
+    strictPurchasable?: number;
+    channelCandidates?: number;
+    finishedAccounts?: number;
+    activeSources?: number;
+    completeSources?: number;
+    partialSources?: number;
   };
   categories: CatalogCategory[];
   offers: CatalogOffer[];
   deltas: RunDelta[];
   notices: string[];
+  sourceDiagnostics?: Array<{
+    id: string;
+    transport?: string;
+    ok: boolean;
+    offersLoaded: number;
+    listedOffers: number;
+    complete?: boolean;
+    completeness?: number;
+    pageCount?: number;
+    requestCount?: number;
+    sourceGeneratedAt?: string | null;
+    error?: string | null;
+  }>;
 };
 
 type Filters = {
   category: string;
+  availability: string;
+  productForm: string;
   stock: string;
   verification: string;
   delivery: string;
@@ -153,7 +197,7 @@ const categoryFallbacks: CatalogCategory[] = [
 ];
 
 const emptyData: CatalogData = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   generatedAt: "",
   runId: "waiting",
   sourceWindow: "等待读取数据快照",
@@ -171,6 +215,12 @@ const emptyData: CatalogData = {
     domains: 0,
     failedSources: 0,
     blockedDomains: 0,
+    strictPurchasable: 0,
+    channelCandidates: 0,
+    finishedAccounts: 0,
+    activeSources: 0,
+    completeSources: 0,
+    partialSources: 0,
   },
   categories: categoryFallbacks,
   offers: [],
@@ -180,6 +230,8 @@ const emptyData: CatalogData = {
 
 const defaultFilters: Filters = {
   category: "all",
+  availability: "all",
+  productForm: "all",
   stock: "all",
   verification: "all",
   delivery: "all",
@@ -209,6 +261,25 @@ const freshnessMeta: Record<FreshnessStatus, { label: string; detail: string }> 
   unknown: { label: "时间未知", detail: "来源未公开可解析的更新时间" },
 };
 
+const purchaseMeta: Record<PurchaseStatus, { label: string; detail: string }> = {
+  confirmed: { label: "严格可购", detail: "套餐、价格、明确库存、原商家入口和原页下单动作同时成立" },
+  channel_candidate: { label: "渠道候选", detail: "套餐、价格、明确库存和原商家入口成立，但原页下单动作尚未确认" },
+  unavailable: { label: "当前无货", detail: "渠道或原页返回售罄、缺货或零库存" },
+  unverified: { label: "等待复核", detail: "可购买所需证据尚未全部成立" },
+};
+
+const productFormMeta: Record<ProductForm, { label: string; detail: string }> = {
+  finished_account: { label: "成品账号", detail: "交付账号、账密或可用凭据" },
+  seat_membership: { label: "席位 / 邀请", detail: "加入 Team / Business 工作区或交付子号" },
+  recharge: { label: "充值 / 代充", detail: "在已有账号上开通或续费" },
+  activation_code: { label: "卡密 / 激活码", detail: "交付 CDK、兑换码、激活码或续费码" },
+  shared_access: { label: "拼车 / 共享", detail: "多人拼车、团购、合租或共享入口" },
+  mirror_access: { label: "镜像站", detail: "第三方镜像或国内网页入口，不是 Plus 成品账号" },
+  web_account: { label: "网页号", detail: "仅限网页使用或明确标注网页版" },
+  service: { label: "辅助服务", detail: "提链、扫码、邀请或其他周边服务" },
+  other: { label: "其他形态", detail: "来源没有足够信息归入标准形态" },
+};
+
 const planRows = [
   { name: "Plus 成品号", owner: "商家交付账号", duration: "多为短期 / 首登质保", fit: "低成本临时体验", risk: "账号归属、封号与找回风险高" },
   { name: "Plus 正价代充", owner: "使用自己的账号", duration: "通常按月订阅", fit: "希望保留本人账号与历史", risk: "需核对渠道、地区与售后" },
@@ -217,7 +288,7 @@ const planRows = [
   { name: "Pro 5x / 20x", owner: "本人账号或成品号", duration: "月度 / 短期", fit: "高强度、较高额度使用", risk: "价格高；速刷和异常渠道风险显著" },
 ];
 
-const quickTags = ["成品号", "代充", "CDK", "自动发货", "质保", "席位", "已接码", "未接码", "iOS", "K12"];
+const quickTags = ["成品号", "已接码", "未接码", "长期质保", "席位", "K12", "Bug Team", "代充", "CDK", "拼车 / 团购", "国内镜像站"];
 const PAGE_SIZE = 30;
 
 function formatMoney(value: number | null | undefined) {
@@ -250,18 +321,63 @@ function relativeTime(value: string | null | undefined) {
 }
 
 function freshnessOf(offer: CatalogOffer): FreshnessStatus {
-  if (offer.freshnessStatus) return offer.freshnessStatus;
   const evidenceAt = offer.verification === "direct" ? offer.checkedAt : offer.updatedAt;
-  if (!evidenceAt) return "unknown";
+  if (!evidenceAt) return offer.freshnessStatus ?? "unknown";
   const hours = (Date.now() - new Date(evidenceAt).getTime()) / 3_600_000;
+  if (!Number.isFinite(hours)) return offer.freshnessStatus ?? "unknown";
   if (hours <= 1) return "live";
   if (hours <= 6) return "fresh";
   if (hours <= 24) return "aging";
   return "stale";
 }
 
-function isTrustedAvailable(offer: CatalogOffer) {
-  return offer.stockStatus === "in_stock" && ["direct", "feed"].includes(offer.verification) && ["live", "fresh", "aging"].includes(freshnessOf(offer));
+function productFormOf(offer: CatalogOffer): ProductForm {
+  if (offer.productForm && productFormMeta[offer.productForm]) return offer.productForm;
+  const text = `${offer.productName} ${offer.deliveryType} ${offer.tags.join(" ")}`;
+  if (/镜像站|国内镜像/i.test(text)) return "mirror_access";
+  if (/拼车|团购|合租|共享/i.test(text)) return "shared_access";
+  if (/网页号|仅限网页/i.test(text)) return "web_account";
+  if (/席位|邀请|自动拉|子号/i.test(text)) return "seat_membership";
+  if (/卡密|CDK|激活码|续费码|兑换码/i.test(text)) return "activation_code";
+  if (/代充|直充|充值|代开/i.test(text)) return "recharge";
+  if (/成品|账号|账密|日抛|白号|普号/i.test(text)) return "finished_account";
+  if (offer.categoryId === "chatgpt-services") return "service";
+  return "other";
+}
+
+function purchaseStatusOf(offer: CatalogOffer): PurchaseStatus {
+  if (offer.purchaseStatus && purchaseMeta[offer.purchaseStatus]) return offer.purchaseStatus;
+  if (offer.stockStatus === "out_of_stock") return "unavailable";
+  const hasCoreEvidence = offer.priceCny != null && offer.stockStatus === "in_stock" && Boolean(cleanDirectUrl(offer.purchaseUrl));
+  if (offer.verification === "direct" && hasCoreEvidence) return "confirmed";
+  if (offer.verification === "feed" && hasCoreEvidence && ["live", "fresh"].includes(freshnessOf(offer))) return "channel_candidate";
+  return "unverified";
+}
+
+function isStrictPurchasable(offer: CatalogOffer) {
+  return purchaseStatusOf(offer) === "confirmed" && ["live", "fresh", "aging"].includes(freshnessOf(offer));
+}
+
+function isChannelCandidate(offer: CatalogOffer) {
+  return purchaseStatusOf(offer) === "channel_candidate" && ["live", "fresh"].includes(freshnessOf(offer));
+}
+
+function strictLowOf(offer: CatalogOffer) {
+  return offer.strictLowCny ?? (offer.verification === "direct" ? offer.trustedLowCny ?? null : null);
+}
+
+function channelLowOf(offer: CatalogOffer) {
+  return offer.channelLowCny ?? offer.trustedLowCny ?? null;
+}
+
+function purchaseEvidenceOf(offer: CatalogOffer) {
+  return offer.purchaseEvidence ?? {
+    planMatched: Boolean(offer.categoryId),
+    priceMatched: offer.priceCny != null,
+    stockExplicit: offer.stockStatus !== "unverified",
+    entryUrlValid: Boolean(cleanDirectUrl(offer.purchaseUrl)),
+    checkoutActionConfirmed: offer.verification === "direct",
+  };
 }
 
 function cleanDirectUrl(value: string | null) {
@@ -311,6 +427,18 @@ function VerificationPill({ offer }: { offer: CatalogOffer }) {
   );
 }
 
+function PurchasePill({ offer }: { offer: CatalogOffer }) {
+  const status = purchaseStatusOf(offer);
+  const meta = purchaseMeta[status];
+  return <span className={`purchase-pill purchase-${status}`} title={meta.detail}>{status === "confirmed" ? <BadgeCheck /> : status === "channel_candidate" ? <Zap /> : status === "unavailable" ? <CircleAlert /> : <Clock3 />}{meta.label}</span>;
+}
+
+function ProductFormPill({ offer }: { offer: CatalogOffer }) {
+  const form = productFormOf(offer);
+  const meta = productFormMeta[form];
+  return <span className={`product-form-pill form-${form}`} title={meta.detail}>{meta.label}</span>;
+}
+
 function FreshnessPill({ offer }: { offer: CatalogOffer }) {
   const freshness = freshnessOf(offer);
   const meta = freshnessMeta[freshness];
@@ -350,10 +478,12 @@ function Sparkline({ points }: { points: PricePoint[] }) {
 function OfferActions({ offer, compact = false }: { offer: CatalogOffer; compact?: boolean }) {
   const purchaseUrl = cleanDirectUrl(offer.purchaseUrl);
   const shopUrl = cleanDirectUrl(offer.shopUrl);
+  const purchaseStatus = purchaseStatusOf(offer);
+  const actionLabel = purchaseStatus === "confirmed" ? "已核验购买" : purchaseStatus === "channel_candidate" ? "原站核对" : purchaseStatus === "unavailable" ? "查看原页" : "打开原页";
   return (
     <div className={`offer-actions ${compact ? "compact" : ""}`}>
       {shopUrl && <a className="shop-link" href={shopUrl} target="_blank" rel="noopener noreferrer" aria-label={`打开 ${offer.merchant} 店铺`}><Store />店铺</a>}
-      {purchaseUrl ? <a className={`purchase-link ${offer.stockStatus === "out_of_stock" ? "muted" : ""}`} href={purchaseUrl} target="_blank" rel="noopener noreferrer">{offer.stockStatus === "out_of_stock" ? "查看原页" : "直达购买"}<ExternalLink /></a> : <span className="purchase-link disabled">链接待恢复</span>}
+      {purchaseUrl ? <a className={`purchase-link status-${purchaseStatus} ${offer.stockStatus === "out_of_stock" ? "muted" : ""}`} href={purchaseUrl} target="_blank" rel="noopener noreferrer" title={purchaseMeta[purchaseStatus].detail}>{actionLabel}<ExternalLink /></a> : <span className="purchase-link disabled">链接待恢复</span>}
     </div>
   );
 }
@@ -370,6 +500,8 @@ function FilterPanel({ filters, categories, domains, onChange, onToggleTag, onRe
     <div className="filter-panel">
       <div className="filter-grid">
         <label><span>商品类别</span><select value={filters.category} onChange={(event) => onChange("category", event.target.value)}><option value="all">全部类别</option>{categories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+        <label><span>可购判定</span><select value={filters.availability} onChange={(event) => onChange("availability", event.target.value)}><option value="all">全部判定</option><option value="confirmed">严格可购</option><option value="channel_candidate">渠道候选</option><option value="unavailable">当前无货</option><option value="unverified">等待复核</option></select></label>
+        <label><span>商品形态</span><select value={filters.productForm} onChange={(event) => onChange("productForm", event.target.value)}><option value="all">全部形态</option>{Object.entries(productFormMeta).map(([value, meta]) => <option value={value} key={value}>{meta.label}</option>)}</select></label>
         <label><span>库存状态</span><select value={filters.stock} onChange={(event) => onChange("stock", event.target.value)}><option value="all">全部状态</option><option value="in_stock">显示有货</option><option value="out_of_stock">已售罄</option><option value="unverified">库存未确认</option></select></label>
         <label><span>证据等级</span><select value={filters.verification} onChange={(event) => onChange("verification", event.target.value)}><option value="all">全部证据</option><option value="direct">原页确认</option><option value="feed">渠道新鲜</option><option value="reachable">页面可达</option><option value="indexed">目录收录</option><option value="failed">复核失败</option></select></label>
         <label><span>更新新鲜度</span><select value={filters.freshness} onChange={(event) => onChange("freshness", event.target.value)}><option value="all">全部时间</option><option value="live">1 小时内</option><option value="fresh">6 小时内</option><option value="aging">24 小时内</option><option value="stale">已过期</option><option value="unknown">时间未知</option></select></label>
@@ -390,26 +522,36 @@ function FilterPanel({ filters, categories, domains, onChange, onToggleTag, onRe
 }
 
 function OfferDetail({ offer, onClose }: { offer: CatalogOffer; onClose: () => void }) {
+  const evidence = purchaseEvidenceOf(offer);
+  const evidenceRows = [
+    ["套餐已识别", evidence.planMatched],
+    ["价格已匹配", evidence.priceMatched],
+    ["库存已明确", evidence.stockExplicit],
+    ["原商家入口有效", evidence.entryUrlValid],
+    ["原页下单动作", evidence.checkoutActionConfirmed],
+  ] as const;
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-title">
         <header className="modal-header"><div><span><ShieldCheck />证据记录</span><h2 id="detail-title">{offer.merchant}</h2></div><button type="button" onClick={onClose} aria-label="关闭详情"><X /></button></header>
         <p className="detail-product">{offer.productName}</p>
-        <div className="detail-pills"><StockPill offer={offer} /><VerificationPill offer={offer} /><FreshnessPill offer={offer} /></div>
+        <div className="detail-pills"><PurchasePill offer={offer} /><ProductFormPill offer={offer} /><StockPill offer={offer} /><VerificationPill offer={offer} /><FreshnessPill offer={offer} /></div>
         <div className="detail-metrics">
           <div><span>当前价格</span><strong>{formatMoney(offer.priceCny)}</strong></div>
-          <div><span>可信历史低</span><strong>{formatMoney(offer.trustedLowCny)}</strong></div>
+          <div><span>严格历史低</span><strong>{formatMoney(strictLowOf(offer))}</strong></div>
+          <div><span>渠道历史低</span><strong>{formatMoney(channelLowOf(offer))}</strong></div>
           <div><span>库存</span><strong>{offer.stockCount == null ? "未公开" : offer.stockCount.toLocaleString("zh-CN")}</strong></div>
-          <div><span>{offer.salesCount != null ? "原页销量" : "7 日库存消耗"}</span><strong>{compactNumber(demandValue(offer))}</strong></div>
         </div>
+        <div className="evidence-checklist" aria-label="严格可购证据清单">{evidenceRows.map(([label, passed]) => <div className={passed ? "passed" : "missing"} key={label}>{passed ? <CheckCircle2 /> : <CircleAlert />}<span>{label}</span><strong>{passed ? "成立" : "未确认"}</strong></div>)}</div>
         <div className="detail-record">
-          <div><span>当前证据</span><strong>{verificationMeta[offer.verification].label} · 可信度 {offer.availabilityConfidence ?? "—"}</strong></div>
+          <div><span>当前判定</span><strong>{purchaseMeta[purchaseStatusOf(offer)].label} · 可信度 {offer.availabilityConfidence ?? "—"}</strong></div>
           <p>{offer.verificationReason}</p>
           {offer.pageCheckReason && <p className="page-check-note"><b>原页复核：</b>{offer.pageCheckReason}</p>}
           <dl>
             <div><dt>渠道更新时间</dt><dd>{formatDate(offer.updatedAt)}</dd></div>
             <div><dt>原页复核时间</dt><dd>{formatDate(offer.checkedAt)}</dd></div>
             <div><dt>交付类型</dt><dd>{offer.deliveryType}</dd></div>
+            <div><dt>商品形态</dt><dd>{productFormMeta[productFormOf(offer)].label}</dd></div>
             <div><dt>最低起购</dt><dd>{offer.minPurchase ? `${offer.minPurchase} 件` : "未标注"}</dd></div>
             <div><dt>原站域名</dt><dd>{offer.domain}</dd></div>
             <div><dt>历史样本</dt><dd>{offer.priceHistory.length} 次</dd></div>
@@ -431,7 +573,9 @@ function CompareModal({ offers, onClose, onRemove }: { offers: CatalogOffer[]; o
           <table className="compare-table">
             <thead><tr><th>对比项</th>{offers.map((offer) => <th key={offer.id}><button type="button" onClick={() => onRemove(offer.id)} aria-label={`移除 ${offer.merchant}`}><X /></button><strong>{offer.merchant}</strong><span>{offer.categoryName}</span></th>)}</tr></thead>
             <tbody>
-              <tr><th>当前价格</th>{offers.map((offer) => <td key={offer.id}><b>{formatMoney(offer.priceCny)}</b><small>可信低 {formatMoney(offer.trustedLowCny)}</small></td>)}</tr>
+              <tr><th>当前价格</th>{offers.map((offer) => <td key={offer.id}><b>{formatMoney(offer.priceCny)}</b><small>严格低 {formatMoney(strictLowOf(offer))} · 渠道低 {formatMoney(channelLowOf(offer))}</small></td>)}</tr>
+              <tr><th>可购判定</th>{offers.map((offer) => <td key={offer.id}><PurchasePill offer={offer} /></td>)}</tr>
+              <tr><th>商品形态</th>{offers.map((offer) => <td key={offer.id}><ProductFormPill offer={offer} /></td>)}</tr>
               <tr><th>库存</th>{offers.map((offer) => <td key={offer.id}><StockPill offer={offer} /></td>)}</tr>
               <tr><th>证据</th>{offers.map((offer) => <td key={offer.id}><VerificationPill offer={offer} /><small>可信度 {offer.availabilityConfidence ?? "—"}</small></td>)}</tr>
               <tr><th>新鲜度</th>{offers.map((offer) => <td key={offer.id}><FreshnessPill offer={offer} /></td>)}</tr>
@@ -462,7 +606,6 @@ export function RadarDashboard() {
 
   const loadCatalog = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
-    else setLoading(true);
     try {
       const url = new URL("data/catalog.json", document.baseURI);
       url.searchParams.set("v", String(Date.now()));
@@ -516,9 +659,12 @@ export function RadarDashboard() {
     const minStock = filters.stockMin ? Number(filters.stockMin) : null;
     const minDemand = filters.demandMin ? Number(filters.demandMin) : null;
     const verificationRank: Record<Verification, number> = { direct: 0, feed: 1, reachable: 2, indexed: 3, failed: 4 };
+    const purchaseRank: Record<PurchaseStatus, number> = { confirmed: 0, channel_candidate: 1, unverified: 2, unavailable: 3 };
     const freshnessRank: Record<FreshnessStatus, number> = { live: 0, fresh: 1, aging: 2, stale: 3, unknown: 4 };
     const filtered = data.offers.filter((offer) => {
       if (filters.category !== "all" && offer.categoryId !== filters.category) return false;
+      if (filters.availability !== "all" && purchaseStatusOf(offer) !== filters.availability) return false;
+      if (filters.productForm !== "all" && productFormOf(offer) !== filters.productForm) return false;
       if (filters.stock !== "all" && offer.stockStatus !== filters.stock) return false;
       if (filters.verification !== "all" && offer.verification !== filters.verification) return false;
       if (filters.delivery !== "all" && offer.deliveryType !== filters.delivery) return false;
@@ -530,12 +676,14 @@ export function RadarDashboard() {
       const demand = demandValue(offer);
       if (minDemand != null && (demand == null || demand < minDemand)) return false;
       if (filters.tags.length && !filters.tags.every((tag) => offer.tags.includes(tag))) return false;
-      if (term && !`${offer.merchant} ${offer.productName} ${offer.domain} ${offer.deliveryType} ${offer.tags.join(" ")}`.toLocaleLowerCase("zh-CN").includes(term)) return false;
+      if (term && !`${offer.merchant} ${offer.productName} ${offer.domain} ${offer.deliveryType} ${productFormMeta[productFormOf(offer)].label} ${purchaseMeta[purchaseStatusOf(offer)].label} ${offer.tags.join(" ")}`.toLocaleLowerCase("zh-CN").includes(term)) return false;
       return true;
     });
     return filtered.sort((a, b) => {
       if (filters.sort === "price_asc") return (a.priceCny ?? Infinity) - (b.priceCny ?? Infinity);
       if (filters.sort === "price_desc") return (b.priceCny ?? -Infinity) - (a.priceCny ?? -Infinity);
+      if (filters.sort === "strict_price_asc") return Number(!isStrictPurchasable(a)) - Number(!isStrictPurchasable(b)) || (a.priceCny ?? Infinity) - (b.priceCny ?? Infinity);
+      if (filters.sort === "candidate_price_asc") return Number(!isChannelCandidate(a)) - Number(!isChannelCandidate(b)) || (a.priceCny ?? Infinity) - (b.priceCny ?? Infinity);
       if (filters.sort === "sales_desc") return (b.salesCount ?? -1) - (a.salesCount ?? -1);
       if (filters.sort === "depletion_desc") return (b.stockDepletion7d ?? -1) - (a.stockDepletion7d ?? -1);
       if (filters.sort === "stock_desc") return (b.stockCount ?? -1) - (a.stockCount ?? -1);
@@ -543,14 +691,16 @@ export function RadarDashboard() {
       if (filters.sort === "freshness") return freshnessRank[freshnessOf(a)] - freshnessRank[freshnessOf(b)] || new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime();
       if (filters.sort === "price_drop") return priceDrop(b) - priceDrop(a);
       if (filters.sort === "long_term_low") {
-        const aDistance = a.priceCny != null && a.trustedLowCny != null ? a.priceCny / Math.max(a.trustedLowCny, 0.01) : Infinity;
-        const bDistance = b.priceCny != null && b.trustedLowCny != null ? b.priceCny / Math.max(b.trustedLowCny, 0.01) : Infinity;
+        const aLow = isStrictPurchasable(a) ? strictLowOf(a) : channelLowOf(a);
+        const bLow = isStrictPurchasable(b) ? strictLowOf(b) : channelLowOf(b);
+        const aDistance = a.priceCny != null && aLow != null ? a.priceCny / Math.max(aLow, 0.01) : Infinity;
+        const bDistance = b.priceCny != null && bLow != null ? b.priceCny / Math.max(bLow, 0.01) : Infinity;
         return aDistance - bDistance || (b.priceHistory?.length ?? 0) - (a.priceHistory?.length ?? 0);
       }
       if (filters.sort === "updated") return new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime();
       if (filters.sort === "merchant") return a.merchant.localeCompare(b.merchant, "zh-CN");
       const stockRank = (item: CatalogOffer) => item.stockStatus === "in_stock" ? 0 : item.stockStatus === "unverified" ? 1 : 2;
-      return verificationRank[a.verification] - verificationRank[b.verification] || freshnessRank[freshnessOf(a)] - freshnessRank[freshnessOf(b)] || stockRank(a) - stockRank(b) || (a.priceCny ?? Infinity) - (b.priceCny ?? Infinity);
+      return purchaseRank[purchaseStatusOf(a)] - purchaseRank[purchaseStatusOf(b)] || verificationRank[a.verification] - verificationRank[b.verification] || freshnessRank[freshnessOf(a)] - freshnessRank[freshnessOf(b)] || stockRank(a) - stockRank(b) || (a.priceCny ?? Infinity) - (b.priceCny ?? Infinity);
     });
   }, [data.offers, filters, query]);
 
@@ -560,14 +710,19 @@ export function RadarDashboard() {
   const selectedOffers = selectedIds.map((id) => data.offers.find((offer) => offer.id === id)).filter((offer): offer is CatalogOffer => Boolean(offer));
   const activeFilterCount = Object.entries(filters).filter(([key, value]) => key !== "sort" && (Array.isArray(value) ? value.length > 0 : value !== "all" && value !== "")).length;
   const status = snapshotState(data.generatedAt);
-  const trustedAvailable = data.offers.filter(isTrustedAvailable).length;
-  const lowPicks = useMemo(() => data.offers
-    .filter((offer) => isTrustedAvailable(offer) && offer.priceCny != null && offer.trustedLowCny != null)
+  const strictPurchasable = data.offers.filter(isStrictPurchasable).length;
+  const channelCandidates = data.offers.filter(isChannelCandidate).length;
+  const strictLowPicks = useMemo(() => data.offers
+    .filter((offer) => isStrictPurchasable(offer) && offer.priceCny != null && strictLowOf(offer) != null && offer.priceHistory.length >= 2)
     .sort((a, b) => {
-      const aDistance = (a.priceCny ?? Infinity) / Math.max(a.trustedLowCny ?? 0.01, 0.01);
-      const bDistance = (b.priceCny ?? Infinity) / Math.max(b.trustedLowCny ?? 0.01, 0.01);
+      const aDistance = (a.priceCny ?? Infinity) / Math.max(strictLowOf(a) ?? 0.01, 0.01);
+      const bDistance = (b.priceCny ?? Infinity) / Math.max(strictLowOf(b) ?? 0.01, 0.01);
       return aDistance - bDistance || (b.priceHistory?.length ?? 0) - (a.priceHistory?.length ?? 0) || (a.priceCny ?? Infinity) - (b.priceCny ?? Infinity);
     }).slice(0, 5), [data.offers]);
+  const channelLowPicks = useMemo(() => data.offers
+    .filter((offer) => isChannelCandidate(offer) && offer.priceCny != null && ["chatgpt-plus", "chatgpt-team-business"].includes(offer.categoryId) && ["finished_account", "seat_membership", "web_account"].includes(productFormOf(offer)))
+    .sort((a, b) => (a.priceCny ?? Infinity) - (b.priceCny ?? Infinity) || (b.stockCount ?? -1) - (a.stockCount ?? -1))
+    .slice(0, 5), [data.offers]);
 
   const updateQuery = (value: string) => { setQuery(value); setPage(1); };
   const setFilter = (key: keyof Filters, value: string) => { setFilters((current) => ({ ...current, [key]: value })); setPage(1); };
@@ -591,9 +746,9 @@ export function RadarDashboard() {
       <section className="command-hero" id="top">
         <div className="hero-grid" />
         <div className="hero-copy">
-          <div className="eyebrow"><span><Zap />30 MIN REFRESH</span><i />原商家直达 · 多级库存证据</div>
+          <div className="eyebrow"><span><Zap />30 MIN REFRESH</span><i />结构化全量采集 · 原商家直达</div>
           <h1>AI 账号行情台</h1>
-          <p>把数千条公开报价压缩成可筛选、可比较、可追溯的购买决策。先看库存证据，再看价格，不用跳回聚合页。</p>
+          <p>把数千条公开报价拆成成品账号、席位、充值、网页号与镜像站，再分别核对套餐、价格、库存、入口和原页下单动作。先确认是不是同一种商品，再比较价格。</p>
           <a className="hero-jump" href="#catalog">立即筛选 {compactNumber(data.coverage.loadedOffers)} 条商品<ChevronRight /></a>
           <div className="hero-meta" aria-live="polite"><span><Activity />{message}</span><span><Clock3 />生成于 {relativeTime(data.generatedAt)}</span></div>
         </div>
@@ -602,19 +757,21 @@ export function RadarDashboard() {
           <div className="health-grid">
             <div><span>公开报价规模</span><strong>{compactNumber(data.coverage.listedOffers)}</strong><small>发现层总量</small></div>
             <div><span>站内可点击</span><strong>{compactNumber(data.coverage.loadedOffers)}</strong><small>{data.coverage.uniqueMerchants} 个商家</small></div>
-            <div><span>可信有货</span><strong>{compactNumber(trustedAvailable)}</strong><small>原页 + 新鲜渠道</small></div>
-            <div><span>渠道覆盖</span><strong>{compactNumber(data.coverage.domains)}</strong><small>原站域名</small></div>
+            <div><span>严格可购</span><strong>{compactNumber(strictPurchasable)}</strong><small>五项证据同时成立</small></div>
+            <div><span>渠道候选</span><strong>{compactNumber(channelCandidates)}</strong><small>需到原站最终核对</small></div>
           </div>
           <footer><span><i />每 30 分钟尝试全量刷新</span><span>页面每 5 分钟自动同步</span></footer>
         </div>
       </section>
 
       <section className="evidence-strip" aria-label="证据层概览">
-        <div><BadgeCheck /><span><b>{compactNumber(data.coverage.directVerified)}</b> 原页确认</span><small>商品、价格、库存、下单动作同页成立</small></div>
-        <div><Zap /><span><b>{compactNumber(data.coverage.feedVerified)}</b> 渠道新鲜</span><small>6 小时内上游库存信号</small></div>
-        <div><PackageCheck /><span><b>{compactNumber(data.coverage.inStock)}</b> 目录有货</span><small>不自动等同于原页确认</small></div>
+        <div><BadgeCheck /><span><b>{compactNumber(strictPurchasable)}</b> 严格可购</span><small>套餐、价格、库存、入口、下单动作全成立</small></div>
+        <div><Zap /><span><b>{compactNumber(channelCandidates)}</b> 渠道候选</span><small>接口库存新鲜，但原页动作未确认</small></div>
+        <div><PackageCheck /><span><b>{compactNumber(data.coverage.finishedAccounts)}</b> 成品账号</span><small>已与镜像、拼车、充值和席位拆分</small></div>
         <div><BarChart3 /><span><b>{compactNumber(data.coverage.salesObserved)}</b> 公开销量</span><small>仅记录原页明确披露</small></div>
       </section>
+
+      {status.level !== "healthy" && <div className={`snapshot-warning warning-${status.level}`} role="status"><CircleAlert /><div><strong>{status.level === "stale" ? "当前快照已经过期" : "本轮后台更新出现延迟"}</strong><span>数据生成于 {formatDate(data.generatedAt)}。价格和库存可能已变化，请优先查看“严格可购”记录并在原商家页面再次核对。</span></div></div>}
 
       <section className="catalog-section" id="catalog">
         <div className="catalog-heading">
@@ -624,31 +781,31 @@ export function RadarDashboard() {
 
         <div className="category-rail" aria-label="商品类别">
           <button type="button" className={filters.category === "all" ? "active" : ""} onClick={() => setFilter("category", "all")}><span>全部</span><strong>{compactNumber(data.coverage.loadedOffers)}</strong></button>
-          {data.categories.map((category) => <button type="button" className={filters.category === category.id ? "active" : ""} key={category.id} onClick={() => setFilter("category", category.id)}><span>{category.shortName}</span><strong>{compactNumber(category.offerCount)}</strong><small>{formatMoney(category.floorPriceCny)} 起</small></button>)}
+          {data.categories.map((category) => <button type="button" className={filters.category === category.id ? "active" : ""} key={category.id} onClick={() => setFilter("category", category.id)}><span>{category.shortName}</span><strong>{compactNumber(category.loadedCount ?? category.offerCount)}</strong><small>{category.strictFloorPriceCny != null ? `核验 ${formatMoney(category.strictFloorPriceCny)}` : category.finishedAccountFloorPriceCny != null ? `成品 ${formatMoney(category.finishedAccountFloorPriceCny)}` : `候选 ${formatMoney(category.channelFloorPriceCny ?? category.floorPriceCny)}`}</small></button>)}
         </div>
 
         <div className="catalog-shell">
           <div className="catalog-toolbar">
             <label className="search-box"><Search /><input value={query} onChange={(event) => updateQuery(event.target.value)} placeholder="搜索商家、商品、域名、交付或标签" aria-label="搜索商品" />{query && <button type="button" onClick={() => updateQuery("")} aria-label="清空搜索"><X /></button>}</label>
-            <label className="sort-control"><span><ArrowDownUp />排序</span><select value={filters.sort} onChange={(event) => setFilter("sort", event.target.value)} aria-label="排序方式"><option value="recommended">可信推荐</option><option value="price_asc">价格：低 → 高</option><option value="price_desc">价格：高 → 低</option><option value="sales_desc">原页公开销量：高 → 低</option><option value="depletion_desc">7 日库存消耗估算：高 → 低</option><option value="stock_desc">库存：高 → 低</option><option value="stock_asc">库存：低 → 高</option><option value="freshness">新鲜度：新 → 旧</option><option value="price_drop">降价幅度：高 → 低</option><option value="long_term_low">长期低价优先</option><option value="updated">更新时间：新 → 旧</option><option value="merchant">商家名称 A → Z</option></select></label>
+            <label className="sort-control"><span><ArrowDownUp />排序</span><select value={filters.sort} onChange={(event) => setFilter("sort", event.target.value)} aria-label="排序方式"><option value="recommended">严格证据优先</option><option value="strict_price_asc">严格可购：低价优先</option><option value="candidate_price_asc">渠道候选：低价优先</option><option value="price_asc">全部价格：低 → 高</option><option value="price_desc">全部价格：高 → 低</option><option value="sales_desc">原页公开销量：高 → 低</option><option value="depletion_desc">7 日库存消耗估算：高 → 低</option><option value="stock_desc">库存：高 → 低</option><option value="stock_asc">库存：低 → 高</option><option value="freshness">新鲜度：新 → 旧</option><option value="price_drop">降价幅度：高 → 低</option><option value="long_term_low">长期低价优先</option><option value="updated">更新时间：新 → 旧</option><option value="merchant">商家名称 A → Z</option></select></label>
             <button type="button" className="mobile-filter-button" onClick={() => setMobileFilters(true)}><SlidersHorizontal />筛选{activeFilterCount ? <b>{activeFilterCount}</b> : null}</button>
           </div>
           <div className="desktop-filters"><FilterPanel {...filterProps} /></div>
-          <div className="result-bar"><span><Filter />当前显示 <b>{offers.length.toLocaleString("zh-CN")}</b> 条</span><span>可信有货 <b>{offers.filter(isTrustedAvailable).length.toLocaleString("zh-CN")}</b> 条</span><span>有销量 / 消耗数据 <b>{offers.filter((offer) => demandValue(offer) != null).length.toLocaleString("zh-CN")}</b> 条</span>{activeFilterCount > 0 || query ? <button type="button" onClick={resetFilters}><X />清空条件</button> : null}</div>
+          <div className="result-bar"><span><Filter />当前显示 <b>{offers.length.toLocaleString("zh-CN")}</b> 条</span><span>严格可购 <b>{offers.filter(isStrictPurchasable).length.toLocaleString("zh-CN")}</b> 条</span><span>渠道候选 <b>{offers.filter(isChannelCandidate).length.toLocaleString("zh-CN")}</b> 条</span><span>销量 / 消耗数据 <b>{offers.filter((offer) => demandValue(offer) != null).length.toLocaleString("zh-CN")}</b> 条</span>{activeFilterCount > 0 || query ? <button type="button" onClick={resetFilters}><X />清空条件</button> : null}</div>
 
           {loading ? <div className="catalog-loading"><LoaderCircle className="spin" /><strong>正在载入商品目录</strong><span>读取最新部署快照。</span></div> : pageOffers.length ? (
             <>
               <div className="offer-table-wrap">
                 <table className="offer-table">
-                  <thead><tr><th className="compare-cell">对比</th><th>商家 / 商品</th><th>证据</th><th>价格</th><th>销量 / 消耗</th><th>库存</th><th>新鲜度</th><th>操作</th></tr></thead>
+                  <thead><tr><th className="compare-cell">对比</th><th>商家 / 商品</th><th>可购判定</th><th>价格</th><th>销量 / 消耗</th><th>库存</th><th>新鲜度</th><th>操作</th></tr></thead>
                   <tbody>{pageOffers.map((offer) => {
                     const movement = priceMovement(offer);
                     return (
-                      <tr key={offer.id} className={isTrustedAvailable(offer) ? "trusted-row" : ""}>
+                      <tr key={offer.id} className={isStrictPurchasable(offer) ? "trusted-row" : isChannelCandidate(offer) ? "candidate-row" : ""}>
                         <td className="compare-cell"><button type="button" className={`compare-check ${selectedIds.includes(offer.id) ? "active" : ""}`} onClick={() => toggleCompare(offer.id)} aria-label={`${selectedIds.includes(offer.id) ? "移出" : "加入"}对比`}>{selectedIds.includes(offer.id) && <Check />}</button></td>
                         <td><button type="button" className="merchant-button" onClick={() => setDetailOffer(offer)}><strong>{offer.merchant}</strong><span>{offer.productName}</span><small>{offer.categoryName} · {offer.deliveryType} · {offer.domain}</small></button></td>
-                        <td><VerificationPill offer={offer} /><small className="confidence">可信度 {offer.availabilityConfidence ?? "—"}</small></td>
-                        <td><div className="price-cell"><strong>{formatMoney(offer.priceCny)}</strong>{movement && <span className={`movement ${movement.kind}`}>{movement.kind === "down" ? <ArrowDown /> : movement.kind === "up" ? <ArrowUp /> : <ArrowDownUp />}{movement.label}</span>}<small>可信低 {formatMoney(offer.trustedLowCny)}</small></div></td>
+                        <td><PurchasePill offer={offer} /><ProductFormPill offer={offer} /><small className="confidence">{verificationMeta[offer.verification].label} · {offer.availabilityConfidence ?? "—"}</small></td>
+                        <td><div className="price-cell"><strong>{formatMoney(offer.priceCny)}</strong>{movement && <span className={`movement ${movement.kind}`}>{movement.kind === "down" ? <ArrowDown /> : movement.kind === "up" ? <ArrowUp /> : <ArrowDownUp />}{movement.label}</span>}<small>{isStrictPurchasable(offer) ? `严格低 ${formatMoney(strictLowOf(offer))}` : `渠道低 ${formatMoney(channelLowOf(offer))}`}</small></div></td>
                         <td><DemandMetric offer={offer} /></td>
                         <td><StockPill offer={offer} />{offer.minPurchase && offer.minPurchase > 1 ? <small className="min-purchase">{offer.minPurchase} 件起</small> : null}</td>
                         <td><FreshnessPill offer={offer} /><small className="absolute-time">{formatDate(offer.verification === "direct" ? offer.checkedAt : offer.updatedAt)}</small></td>
@@ -661,8 +818,8 @@ export function RadarDashboard() {
               <div className="offer-mobile-list">{pageOffers.map((offer) => {
                 const movement = priceMovement(offer);
                 return (
-                  <article className={`offer-mobile-card ${isTrustedAvailable(offer) ? "trusted" : ""}`} key={offer.id}>
-                    <div className="mobile-card-head"><div><VerificationPill offer={offer} /><FreshnessPill offer={offer} /></div><button type="button" className={`compare-check ${selectedIds.includes(offer.id) ? "active" : ""}`} onClick={() => toggleCompare(offer.id)}>{selectedIds.includes(offer.id) ? <><Check />已选</> : <><GitCompareArrows />对比</>}</button></div>
+                  <article className={`offer-mobile-card ${isStrictPurchasable(offer) ? "trusted" : isChannelCandidate(offer) ? "candidate" : ""}`} key={offer.id}>
+                    <div className="mobile-card-head"><div><PurchasePill offer={offer} /><ProductFormPill offer={offer} /><FreshnessPill offer={offer} /></div><button type="button" className={`compare-check ${selectedIds.includes(offer.id) ? "active" : ""}`} onClick={() => toggleCompare(offer.id)}>{selectedIds.includes(offer.id) ? <><Check />已选</> : <><GitCompareArrows />对比</>}</button></div>
                     <button type="button" className="mobile-card-title" onClick={() => setDetailOffer(offer)}><strong>{offer.merchant}</strong><span>{offer.productName}</span><small>{offer.categoryName} · {offer.domain}</small></button>
                     <div className="mobile-card-market"><div><span>价格</span><strong>{formatMoney(offer.priceCny)}</strong>{movement && <small className={`movement ${movement.kind}`}>{movement.label}</small>}</div><div><span>库存</span><StockPill offer={offer} /></div><DemandMetric offer={offer} /></div>
                     <OfferActions offer={offer} />
@@ -676,8 +833,11 @@ export function RadarDashboard() {
       </section>
 
       <section className="section low-price-section" id="low-price">
-        <div className="section-heading"><div><span>LONG-TERM LOW</span><h2>长期低价观察</h2><p>仅纳入仍显示有货且具有原页确认或新鲜渠道证据的商品；样本会随每轮刷新持续累积。</p></div><span className="section-badge"><ShieldCheck />证据优先于绝对低价</span></div>
-        {lowPicks.length ? <div className="low-grid">{lowPicks.map((offer, index) => <article key={offer.id}><header><span>#{String(index + 1).padStart(2, "0")}</span><VerificationPill offer={offer} /></header><h3>{offer.merchant}</h3><p>{offer.productName}</p><div className="low-price"><span>当前</span><strong>{formatMoney(offer.priceCny)}</strong><small>可信历史低 {formatMoney(offer.trustedLowCny)}</small></div><div className="low-chart"><Sparkline points={offer.priceHistory} /><span>{offer.priceHistory.length} 个样本</span></div><OfferActions offer={offer} compact /></article>)}</div> : <div className="empty-state"><LoaderCircle /><div><strong>长期样本正在累积</strong><p>至少需要连续快照才能判断“长期低价”，首轮数据不会被包装成历史趋势。</p></div></div>}
+        <div className="section-heading"><div><span>LONG-TERM LOW</span><h2>长期低价与当前候选</h2><p>长期榜只纳入原页五项证据成立且至少积累两个价格样本的商品；渠道库存不会冒充严格可购。</p></div><span className="section-badge"><ShieldCheck />严格榜与候选榜分开</span></div>
+        <div className="subsection-label"><div><BadgeCheck /><span><strong>严格长期低价</strong><small>原页确认 · 至少 2 个历史样本</small></span></div><b>{strictLowPicks.length} 条</b></div>
+        {strictLowPicks.length ? <div className="low-grid">{strictLowPicks.map((offer, index) => <article key={offer.id}><header><span>#{String(index + 1).padStart(2, "0")}</span><PurchasePill offer={offer} /></header><h3>{offer.merchant}</h3><p>{offer.productName}</p><div className="low-price"><span>当前</span><strong>{formatMoney(offer.priceCny)}</strong><small>严格历史低 {formatMoney(strictLowOf(offer))}</small></div><div className="low-chart"><Sparkline points={offer.priceHistory} /><span>{offer.priceHistory.length} 个样本</span></div><OfferActions offer={offer} compact /></article>)}</div> : <div className="empty-state"><LoaderCircle /><div><strong>严格长期样本仍在累积</strong><p>只有原页同时确认套餐、价格、库存、入口和下单动作后才会进入；不会用渠道报价填充空位。</p></div></div>}
+        <div className="subsection-label candidate-label"><div><Zap /><span><strong>Plus / Business 当前渠道候选</strong><small>明确库存与直达入口成立 · 下单前仍须原页复核</small></span></div><b>{channelLowPicks.length} 条</b></div>
+        {channelLowPicks.length ? <div className="low-grid candidate-grid">{channelLowPicks.map((offer, index) => <article key={offer.id}><header><span>#{String(index + 1).padStart(2, "0")}</span><PurchasePill offer={offer} /></header><h3>{offer.merchant}</h3><p>{offer.productName}</p><div className="low-price"><span>当前候选价</span><strong>{formatMoney(offer.priceCny)}</strong><small>{productFormMeta[productFormOf(offer)].label} · 库存 {offer.stockCount ?? "未公开"}</small></div><div className="low-chart"><Sparkline points={offer.priceHistory} /><span>{relativeTime(offer.updatedAt)}更新</span></div><OfferActions offer={offer} compact /></article>)}</div> : <div className="empty-state"><CircleAlert /><div><strong>暂无新鲜渠道候选</strong><p>当前没有同时满足套餐、价格、明确库存和原商家入口的 Plus / Business 记录。</p></div></div>}
       </section>
 
       <section className="section changes-section" id="changes">
@@ -686,6 +846,11 @@ export function RadarDashboard() {
           <aside><span>采集窗口</span><strong>{data.runId}</strong><p>{data.sourceWindow}</p><dl><div><dt>新鲜商品</dt><dd>{compactNumber(data.coverage.freshOffers)}</dd></div><div><dt>原页可达</dt><dd>{compactNumber(data.coverage.reachable)}</dd></div><div><dt>复核失败</dt><dd>{compactNumber(data.coverage.failedSources)}</dd></div><div><dt>熔断域名</dt><dd>{compactNumber(data.coverage.blockedDomains)}</dd></div></dl></aside>
           <div className="change-list">{data.deltas.length ? data.deltas.slice(0, 10).map((delta) => <article key={delta.id}><span className={`change-icon ${delta.type}`}>{delta.type === "price_down" ? <TrendingDown /> : delta.type === "price_up" ? <ArrowUp /> : delta.type === "restocked" ? <PackageCheck /> : delta.type === "sold_out" ? <CircleAlert /> : <Sparkles />}</span><div><strong>{delta.merchant}</strong><p>{delta.productName}</p></div><div><span>{delta.before}</span><ChevronRight /><strong>{delta.after}</strong><small>{relativeTime(delta.at)}</small></div></article>) : <div className="empty-state"><Activity /><div><strong>暂无可比变化</strong><p>下一轮快照完成后会显示价格与库存差异。</p></div></div>}</div>
         </div>
+        {data.sourceDiagnostics?.length ? <div className="source-health"><header><div><Activity /><span><strong>来源完整度</strong><small>{data.coverage.activeSources ?? data.sourceDiagnostics.filter((item) => item.ok).length}/{data.sourceDiagnostics.length} 个来源可用</small></span></div><p>结构化全量接口优先，页面解析仅作为故障回退。</p></header><div>{data.sourceDiagnostics.map((source) => {
+          const category = data.categories.find((item) => item.id === source.id);
+          const completeness = Math.round((source.completeness ?? (source.listedOffers ? source.offersLoaded / source.listedOffers : 0)) * 100);
+          return <article className={source.ok ? "healthy" : "failed"} key={source.id}><div><strong>{category?.shortName ?? source.id}</strong><span>{source.ok ? source.complete ? "完整" : "部分" : "异常"}</span></div><p>{source.offersLoaded.toLocaleString("zh-CN")} / {source.listedOffers.toLocaleString("zh-CN")} 条</p><div className="source-progress"><i style={{ width: `${Math.min(100, completeness)}%` }} /></div><small>{source.ok ? `${completeness}% · ${relativeTime(source.sourceGeneratedAt)}` : source.error ?? "来源访问失败"}</small></article>;
+        })}</div></div> : null}
       </section>
 
       <section className="section differences-section" id="differences">

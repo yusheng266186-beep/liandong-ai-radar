@@ -4,13 +4,16 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { collectPriceAiOffers, priceAiAdapterMeta } from "./adapters/priceai.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const outputPath = path.join(root, "public", "data", "catalog.json");
+const outputPath = process.env.CATALOG_OUTPUT_PATH ? path.resolve(process.env.CATALOG_OUTPUT_PATH) : path.join(root, "public", "data", "catalog.json");
 const maxLoadClicks = Number(process.env.CATALOG_MAX_LOAD_CLICKS ?? 60);
 const maxVerifications = Number(process.env.CATALOG_MAX_VERIFY ?? 320);
 const verificationConcurrency = Number(process.env.CATALOG_VERIFY_CONCURRENCY ?? 8);
 const discoveryConcurrency = Number(process.env.CATALOG_DISCOVERY_CONCURRENCY ?? 2);
+const apiConcurrency = Number(process.env.CATALOG_API_CONCURRENCY ?? 4);
+const maxApiPages = Number(process.env.CATALOG_MAX_API_PAGES ?? 80);
 const feedFreshHours = Number(process.env.CATALOG_FEED_FRESH_HOURS ?? 6);
 const originalPageTimeout = Number(process.env.CATALOG_PAGE_TIMEOUT_MS ?? 11_000);
 
@@ -22,7 +25,7 @@ const categories = [
   { id: "chatgpt-go", name: "ChatGPT Go", shortName: "GO", description: "Go 月卡、年卡、激活码与自助充值", tags: ["月卡", "卡密", "充值"], url: "https://priceai.cc/products/chatgpt-go", fallbackTotal: 31, fallbackInStock: 24 },
   { id: "chatgpt-pro-20x", name: "ChatGPT Pro 20x", shortName: "PRO 20X", description: "高额度、短期速刷、成品号与正规代开", tags: ["高额度", "速刷", "代开"], url: "https://priceai.cc/products/chatgpt-pro-20x", fallbackTotal: 293, fallbackInStock: 227 },
   { id: "chatgpt-pro-5x", name: "ChatGPT Pro 5x", shortName: "PRO 5X", description: "Pro 5x 成品、iOS 卡密与官方渠道代充", tags: ["iOS", "卡密", "代充"], url: "https://priceai.cc/products/chatgpt-pro-5x", fallbackTotal: 229, fallbackInStock: 182 },
-  { id: "chatgpt-services", name: "周边与自助服务", shortName: "SERVICES", description: "提链、扫码、自助充值、邀请与额度服务", tags: ["提链", "扫码", "邀请"], url: "https://priceai.cc/products/chatgpt-codex-service", fallbackTotal: 47, fallbackInStock: 33 },
+  { id: "chatgpt-services", sourceProductId: "chatgpt-codex-service", name: "周边与自助服务", shortName: "SERVICES", description: "提链、扫码、自助充值、邀请与额度服务", tags: ["提链", "扫码", "邀请"], url: "https://priceai.cc/products/chatgpt-codex-service", fallbackTotal: 47, fallbackInStock: 33 },
 ];
 
 function hash(value, length = 14) {
@@ -43,6 +46,7 @@ function cleanUrl(value) {
   try {
     const url = new URL(value);
     if (!/^https?:$/.test(url.protocol) || /(^|\.)priceai\.cc$/i.test(url.hostname)) return null;
+    if (/^pay\.ldxp\.cn$/i.test(url.hostname)) url.hostname = "www.ldxp.cn";
     for (const key of [...url.searchParams.keys()]) {
       if (key.startsWith("utm_") || ["source", "ref", "from"].includes(key)) url.searchParams.delete(key);
     }
@@ -66,6 +70,8 @@ function toIso(value, reference = new Date()) {
     const unitMs = { 秒: 1_000, 分钟: 60_000, 小时: 3_600_000, 天: 86_400_000 }[relative[2]];
     return new Date(reference.getTime() - Number(relative[1]) * unitMs).toISOString();
   }
+  const directTimestamp = Date.parse(value);
+  if (Number.isFinite(directTimestamp) && /(?:T|Z|[+-]\d{2}:?\d{2})/.test(value)) return new Date(directTimestamp).toISOString();
   const match = value.match(/(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\s+(\d{1,2}):(\d{2})/);
   if (match) {
     const [, year, month, day, hour, minute] = match;
@@ -120,6 +126,53 @@ function tagsFor(categoryId, text, deliveryType) {
   return [...tags];
 }
 
+const sourceFilterTagLabels = {
+  shared_access: "拼车 / 团购",
+  web_only_account: "网页号",
+  domestic_mirror_site: "国内镜像站",
+  delivery_recharge: "充值",
+  delivery_account: "成品号",
+  account_verified: "已接码",
+  account_unverified: "未接码",
+  warranty_long: "长期质保",
+  team_k12: "K12",
+  team_bug: "Bug Team",
+  team_official: "官方 Team",
+};
+
+function productFormFor(categoryId, text, sourceFilterTags = []) {
+  const filters = new Set(sourceFilterTags);
+  if (categoryId === "chatgpt-services") return "service";
+  if (filters.has("domestic_mirror_site") || /镜像站|国内镜像|mirror/i.test(text)) return "mirror_access";
+  if (filters.has("shared_access") || /拼车|团购|合租|车位|共享/i.test(text)) return "shared_access";
+  if (filters.has("web_only_account") || /网页号|仅限网页|网页版/i.test(text)) return "web_account";
+  if (/席位|邀请|自动拉|子号|加入.*(?:team|business)|上车/i.test(text)) return "seat_membership";
+  if (filters.has("delivery_recharge") || /代充|直充|充值|代开/i.test(text)) {
+    return /CDK|卡密|激活码|续费码|兑换码|卡冲|卡充/i.test(text) ? "activation_code" : "recharge";
+  }
+  if (/CDK|卡密|激活码|续费码|兑换码/i.test(text) && !/账号|成品|账密/i.test(text)) return "activation_code";
+  if (filters.has("delivery_account") || filters.has("account_verified") || filters.has("account_unverified") || /成品|账号|账密|日抛|白号|普号/i.test(text)) return "finished_account";
+  return "other";
+}
+
+function purchaseEvidenceFor({ categoryId, priceCny, stockStatus, purchaseUrl, checkoutActionConfirmed = false }) {
+  return {
+    planMatched: Boolean(categoryId),
+    priceMatched: priceCny != null && Number.isFinite(priceCny),
+    stockExplicit: stockStatus !== "unverified",
+    entryUrlValid: Boolean(cleanUrl(purchaseUrl)),
+    checkoutActionConfirmed,
+  };
+}
+
+function purchaseStatusFor(offer) {
+  if (offer.stockStatus === "out_of_stock") return "unavailable";
+  const evidence = offer.purchaseEvidence ?? purchaseEvidenceFor(offer);
+  if (offer.verification === "direct" && Object.values(evidence).every(Boolean)) return "confirmed";
+  if (offer.verification === "feed" && evidence.planMatched && evidence.priceMatched && evidence.stockExplicit && evidence.entryUrlValid) return "channel_candidate";
+  return "unverified";
+}
+
 async function readPrevious() {
   try { return JSON.parse(await readFile(outputPath, "utf8")); } catch { return { offers: [], categories: [], deltas: [] }; }
 }
@@ -164,7 +217,125 @@ async function extractRawOffers(page) {
   }).filter(Boolean));
 }
 
-async function discoverCategory(context, definition) {
+function normalizeApiOffer(definition, raw, nowDate) {
+  const purchaseUrl = cleanUrl(raw.url);
+  const productName = String(raw.sourceTitle ?? "").replace(/\s+/g, " ").trim();
+  const merchant = String(raw.sourceStoreName || raw.sourceName || raw.sourceId || "").replace(/\s+/g, " ").trim();
+  if (!purchaseUrl || !productName || !merchant) return null;
+
+  const numericPrice = Number(raw.price);
+  const priceCny = Number.isFinite(numericPrice) ? numericPrice : null;
+  const numericStock = Number(raw.stockCount);
+  const stockCount = Number.isFinite(numericStock) && numericStock >= 0 ? numericStock : null;
+  const rawStatus = `${raw.status ?? ""} ${raw.effectiveStatus ?? ""}`.toLowerCase();
+  const stockStatus = /out_of_stock|sold_out|unavailable|expired/.test(rawStatus) || stockCount === 0
+    ? "out_of_stock"
+    : /in_stock|low_stock|available/.test(rawStatus) || (stockCount != null && stockCount > 0)
+      ? "in_stock"
+      : "unverified";
+  const sourceFilterTags = Array.isArray(raw.filterTags) ? raw.filterTags.map(String) : [];
+  const deliveryType = deliveryFor(definition.id, `${productName} ${sourceFilterTags.join(" ")}`);
+  const productForm = productFormFor(definition.id, productName, sourceFilterTags);
+  const updatedAt = [raw.sourceUpdatedAt, raw.verifiedAt, raw.lastSeenAt, raw.capturedAt]
+    .map((value) => toIso(String(value ?? ""), nowDate))
+    .find(Boolean) ?? null;
+  const freshnessStatus = freshnessFor(updatedAt, nowDate.getTime());
+  const feedVerified = stockStatus !== "unverified" && ["live", "fresh"].includes(freshnessStatus);
+  const sourceConfidence = Number(raw.confidence);
+  const baseConfidence = Number.isFinite(sourceConfidence) ? Math.round(sourceConfidence * 100) : 80;
+  const dedupeKey = `${definition.id}|${purchaseUrl}`;
+  const tags = new Set([
+    ...tagsFor(definition.id, productName, deliveryType),
+    ...sourceFilterTags.map((tag) => sourceFilterTagLabels[tag]).filter(Boolean),
+  ]);
+  const offer = {
+    id: `offer-${hash(dedupeKey)}`,
+    sourceOfferId: raw.id ? String(raw.id) : null,
+    categoryId: definition.id,
+    categoryName: definition.name,
+    merchant: merchant.slice(0, 120),
+    productName: productName.slice(0, 280),
+    priceCny,
+    previousPriceCny: null,
+    historicalLowCny: null,
+    channelLowCny: null,
+    strictLowCny: null,
+    trustedLowCny: null,
+    stockStatus,
+    stockCount,
+    purchaseUrl,
+    shopUrl: cleanUrl(raw.shopUrl),
+    domain: domainOf(purchaseUrl),
+    updatedAt,
+    checkedAt: null,
+    pageCheckStatus: "not_checked",
+    pageCheckReason: "本轮尚未访问原商品页。",
+    verification: feedVerified ? "feed" : "indexed",
+    verificationReason: feedVerified
+      ? `公开渠道接口在 ${feedFreshHours} 小时新鲜窗口内返回${stockStatus === "in_stock" ? "正库存" : "售罄"}状态；该证据不等同原页下单确认。`
+      : "公开渠道接口已收录，但库存更新时间不在新鲜窗口内，等待原商品页轮询核验。",
+    stockEvidence: feedVerified ? "channel_feed" : stockStatus === "unverified" ? "unknown" : "directory",
+    freshnessStatus,
+    availabilityConfidence: feedVerified ? Math.max(70, Math.min(90, baseConfidence)) : stockStatus === "unverified" ? 25 : 42,
+    deliveryType,
+    productForm,
+    sourceFilterTags,
+    collectorKind: raw.collectorKind ? String(raw.collectorKind) : "public_json_feed",
+    sourceConfidence: Number.isFinite(sourceConfidence) ? sourceConfidence : null,
+    sourcePriority: Number.isFinite(Number(raw.sourcePriority)) ? Number(raw.sourcePriority) : null,
+    sourceExpiresAt: toIso(String(raw.expiresAt ?? ""), nowDate),
+    tags: [...tags],
+    minPurchase: Number.isFinite(Number(raw.minOrderQuantity)) && Number(raw.minOrderQuantity) > 0 ? Number(raw.minOrderQuantity) : null,
+    firstSeenAt: nowDate.toISOString(),
+    lastSeenAt: nowDate.toISOString(),
+    priceHistory: [],
+    stockHistory: [],
+    stockDepletion7d: null,
+    salesCount: null,
+    salesSource: null,
+    salesCheckedAt: null,
+  };
+  offer.purchaseEvidence = purchaseEvidenceFor(offer);
+  offer.purchaseStatus = purchaseStatusFor(offer);
+  return offer;
+}
+
+async function discoverCategoryFromApi(definition) {
+  const result = await collectPriceAiOffers(definition.sourceProductId ?? definition.id, {
+    concurrency: apiConcurrency,
+    maxPages: maxApiPages,
+  });
+  if (!result.ok) {
+    return {
+      ok: false,
+      total: definition.fallbackTotal,
+      inStock: definition.fallbackInStock,
+      offers: [],
+      clickCount: 0,
+      pageCount: result.pageCount,
+      transport: priceAiAdapterMeta.transport,
+      sourceGeneratedAt: result.generatedAt,
+      complete: false,
+      error: result.error,
+    };
+  }
+  const nowDate = new Date();
+  const offers = result.offers.map((raw) => normalizeApiOffer(definition, raw, nowDate)).filter(Boolean);
+  return {
+    ok: offers.length > 0,
+    total: result.total,
+    inStock: result.inStock,
+    offers,
+    clickCount: 0,
+    pageCount: result.pageCount,
+    transport: priceAiAdapterMeta.transport,
+    sourceGeneratedAt: result.generatedAt,
+    complete: result.complete && offers.length >= result.total,
+    error: offers.length > 0 ? null : "公开报价接口没有返回可用商品链接。",
+  };
+}
+
+async function discoverCategoryFromPage(context, definition) {
   const page = await context.newPage();
   try {
     await page.goto(definition.url, { waitUntil: "domcontentloaded", timeout: 90_000 });
@@ -231,11 +402,13 @@ async function discoverCategory(context, definition) {
       const stockCount = stockMatch ? Number(stockMatch[1].replaceAll(",", "")) : null;
       const stockStatus = /缺货|售罄/.test(raw.stockText) ? "out_of_stock" : /有货/.test(raw.stockText) ? "in_stock" : "unverified";
       const deliveryType = deliveryFor(definition.id, `${raw.productName} ${raw.stockText}`);
+      const productForm = productFormFor(definition.id, raw.productName);
       const updatedAt = toIso(raw.updatedText, nowDate);
       const freshnessStatus = freshnessFor(updatedAt, nowDate.getTime());
       const feedVerified = stockStatus !== "unverified" && ["live", "fresh"].includes(freshnessStatus);
-      offers.push({
+      const offer = {
         id: `offer-${hash(dedupeKey)}`,
+        sourceOfferId: null,
         categoryId: definition.id,
         categoryName: definition.name,
         merchant: raw.merchant.slice(0, 120),
@@ -261,6 +434,12 @@ async function discoverCategory(context, definition) {
         freshnessStatus,
         availabilityConfidence: feedVerified ? 82 : stockStatus === "unverified" ? 25 : 42,
         deliveryType,
+        productForm,
+        sourceFilterTags: [],
+        collectorKind: "rendered_page",
+        sourceConfidence: null,
+        sourcePriority: null,
+        sourceExpiresAt: null,
         tags: tagsFor(definition.id, raw.productName, deliveryType),
         minPurchase: minimumMatch ? Number(minimumMatch[1]) : null,
         firstSeenAt: now,
@@ -271,11 +450,14 @@ async function discoverCategory(context, definition) {
         salesCount: null,
         salesSource: null,
         salesCheckedAt: null,
-      });
+      };
+      offer.purchaseEvidence = purchaseEvidenceFor(offer);
+      offer.purchaseStatus = purchaseStatusFor(offer);
+      offers.push(offer);
     }
-    return { ok: true, total, inStock, offers, clickCount, error: null };
+    return { ok: true, total, inStock, offers, clickCount, pageCount: clickCount + 1, transport: "rendered_page_fallback", sourceGeneratedAt: null, complete: offers.length >= total, error: null };
   } catch (error) {
-    return { ok: false, total: definition.fallbackTotal, inStock: definition.fallbackInStock, offers: [], clickCount: 0, error: safeError(error) };
+    return { ok: false, total: definition.fallbackTotal, inStock: definition.fallbackInStock, offers: [], clickCount: 0, pageCount: 0, transport: "rendered_page_fallback", sourceGeneratedAt: null, complete: false, error: safeError(error) };
   } finally {
     await page.close();
   }
@@ -296,8 +478,9 @@ function selectVerificationTargets(offers, previousMap) {
     const bPrevious = previousMap.get(b.id);
     const aAge = aPrevious?.checkedAt ? Date.now() - new Date(aPrevious.checkedAt).getTime() : Infinity;
     const bAge = bPrevious?.checkedAt ? Date.now() - new Date(bPrevious.checkedAt).getTime() : Infinity;
-    const aScore = (priority.get(a.id) ?? 0) + (aPrevious?.verification === "direct" && aAge > 6 * 60 * 60 * 1000 ? 5000 : 0) + (aPrevious?.salesCount != null ? 700 : 0) + (Number.parseInt(hash(`${a.id}-${cycle}`, 8), 16) % 2500);
-    const bScore = (priority.get(b.id) ?? 0) + (bPrevious?.verification === "direct" && bAge > 6 * 60 * 60 * 1000 ? 5000 : 0) + (bPrevious?.salesCount != null ? 700 : 0) + (Number.parseInt(hash(`${b.id}-${cycle}`, 8), 16) % 2500);
+    const formScore = (offer) => offer.productForm === "finished_account" ? 2600 : offer.productForm === "seat_membership" ? 1800 : ["mirror_access", "shared_access"].includes(offer.productForm) ? -3500 : 0;
+    const aScore = (priority.get(a.id) ?? 0) + formScore(a) + (aPrevious?.verification === "direct" && aAge > 6 * 60 * 60 * 1000 ? 5000 : 0) + (aPrevious?.salesCount != null ? 700 : 0) + (Number.parseInt(hash(`${a.id}-${cycle}`, 8), 16) % 2500);
+    const bScore = (priority.get(b.id) ?? 0) + formScore(b) + (bPrevious?.verification === "direct" && bAge > 6 * 60 * 60 * 1000 ? 5000 : 0) + (bPrevious?.salesCount != null ? 700 : 0) + (Number.parseInt(hash(`${b.id}-${cycle}`, 8), 16) % 2500);
     return bScore - aScore;
   });
 
@@ -331,6 +514,21 @@ function disclosedSales(text) {
     return Number.isFinite(base) ? Math.round(base * multiplier) : null;
   }).filter(Number.isFinite);
   return values.length ? Math.max(...values) : null;
+}
+
+function planSignalFor(offer, text) {
+  const lower = text.toLowerCase();
+  const patterns = {
+    "chatgpt-plus": /(?:chat\s*gpt|gpt|codex|g)\s*[-_]?\s*plus|plus\s*(?:账号|成品|account)/i,
+    "chatgpt-team-business": /chat\s*gpt\s*(?:team|business)|\b(?:team|business)\b|k12/i,
+    "chatgpt-plus-recharge": /(?:chat\s*gpt|gpt|codex|g)\s*[-_]?\s*plus|plus\s*(?:充值|代充|cdk|卡)/i,
+    "chatgpt-free-account": /chat\s*gpt|gpt|codex/i,
+    "chatgpt-go": /chat\s*gpt\s*go|gpt\s*go|\bgo\b/i,
+    "chatgpt-pro-20x": /(?:chat\s*gpt|gpt)?\s*pro\s*(?:20\s*x|20倍)/i,
+    "chatgpt-pro-5x": /(?:chat\s*gpt|gpt)?\s*pro\s*(?:5\s*x|5倍)/i,
+    "chatgpt-services": /chat\s*gpt|gpt|codex|提链|扫码|邀请|充值/i,
+  };
+  return (patterns[offer.categoryId] ?? /chat\s*gpt|gpt|codex/i).test(lower);
 }
 
 async function verifyOffer(offer, domainState) {
@@ -382,10 +580,18 @@ async function verifyOffer(offer, domainState) {
     const positiveStock = stockMatches.some((match) => Number(match[1].replaceAll(",", "")) > 0) || /库存充足|stock\s*in\s*stock|fully\s*stocked|现货|有货/i.test(text);
     const soldOut = /售罄|缺货|sold\s*out|out\s*of\s*stock|库存\s*[:：]?\s*0\b|stock\s*[:：]?\s*0\b/i.test(text);
     const purchaseSignal = /立即购买|购买数量|立即下单|提交订单|支付方式|付款|\bbuy\b|add\s*to\s*cart|payment/i.test(text);
-    const productSignal = /chat\s*gpt|gpt|codex|plus|team|business|pro\s*5x|pro\s*20x/i.test(lower);
+    const productSignal = planSignalFor(offer, lower);
+    const redirectedToLogin = /\/(?:login|signin|auth)(?:\/|\?|$)/i.test(new URL(response.url).pathname);
     const observedStock = stockMatches.map((match) => Number(match[1].replaceAll(",", ""))).find((value) => Number.isFinite(value));
     const salesCount = productSignal ? disclosedSales(text) : null;
-    if (hasPrice && positiveStock && purchaseSignal && productSignal && !soldOut) {
+    const purchaseEvidence = purchaseEvidenceFor({
+      categoryId: productSignal ? offer.categoryId : "",
+      priceCny: hasPrice ? offer.priceCny : null,
+      stockStatus: positiveStock && !soldOut ? "in_stock" : soldOut ? "out_of_stock" : "unverified",
+      purchaseUrl: redirectedToLogin ? null : offer.purchaseUrl,
+      checkoutActionConfirmed: purchaseSignal && !redirectedToLogin,
+    });
+    if (Object.values(purchaseEvidence).every(Boolean) && !soldOut) {
       return {
         verification: "direct",
         checkedAt,
@@ -393,9 +599,10 @@ async function verifyOffer(offer, domainState) {
         pageCheckReason: "原商品页同时识别到商品、价格、正库存与下单动作，且未发现售罄信号。",
         observedStockCount: observedStock ?? null,
         salesCount,
+        purchaseEvidence,
       };
     }
-    const missing = [!hasPrice && "价格", !positiveStock && "正库存", !purchaseSignal && "下单动作", !productSignal && "商品标识", soldOut && "无售罄冲突"].filter(Boolean).join("、");
+    const missing = [!hasPrice && "匹配价格", !positiveStock && "正库存", !purchaseSignal && "下单动作", !productSignal && "匹配套餐", redirectedToLogin && "免登录下单入口", soldOut && "无售罄冲突"].filter(Boolean).join("、");
     return {
       verification: "reachable",
       checkedAt,
@@ -403,6 +610,7 @@ async function verifyOffer(offer, domainState) {
       pageCheckReason: `原商品页可访问，但缺少${missing || "足够"}证据，未标记为确认可购买。`,
       observedStockCount: observedStock ?? null,
       salesCount,
+      purchaseEvidence,
     };
   } catch (error) {
     const reason = error instanceof Error && error.name === "AbortError" ? "原商品页访问超时，本轮不能确认库存。" : "原商品页本轮访问失败，已保留直达链接但不确认可购买。";
@@ -442,21 +650,38 @@ function mergePrevious(current, previous, now) {
   current.salesSource = current.salesSource ?? null;
   current.salesCheckedAt = current.salesCheckedAt ?? null;
   current.stockDepletion7d = current.stockDepletion7d ?? null;
+  current.productForm = current.productForm ?? productFormFor(current.categoryId, current.productName, current.sourceFilterTags ?? []);
+  current.sourceFilterTags = Array.isArray(current.sourceFilterTags) ? current.sourceFilterTags : [];
+  current.collectorKind = current.collectorKind ?? "unknown";
+  current.sourceConfidence = current.sourceConfidence ?? null;
+  current.sourcePriority = current.sourcePriority ?? null;
+  current.sourceExpiresAt = current.sourceExpiresAt ?? null;
+  current.purchaseEvidence = current.purchaseEvidence ?? purchaseEvidenceFor(current);
+  current.purchaseStatus = current.purchaseStatus ?? purchaseStatusFor(current);
+  current.channelLowCny = current.channelLowCny ?? null;
+  current.strictLowCny = current.strictLowCny ?? null;
   if (!previous) return current;
   current.firstSeenAt = previous.firstSeenAt || current.firstSeenAt;
   current.previousPriceCny = previous.priceCny ?? null;
   current.priceHistory = Array.isArray(previous.priceHistory)
-    ? previous.priceHistory.slice(-47).map((point) => ({ ...point, evidence: point.evidence ?? previous.verification ?? "indexed" }))
+    ? previous.priceHistory.slice(-47).map((point) => ({
+      ...point,
+      evidence: point.evidence ?? previous.verification ?? "indexed",
+      purchaseStatus: point.purchaseStatus ?? (point.evidence === "direct" ? "confirmed" : point.evidence === "feed" ? "channel_candidate" : undefined),
+    }))
     : [];
   current.stockHistory = Array.isArray(previous.stockHistory) ? previous.stockHistory.slice(-47) : [];
   current.historicalLowCny = previous.historicalLowCny ?? null;
-  current.trustedLowCny = previous.trustedLowCny ?? null;
+  current.channelLowCny = previous.channelLowCny ?? previous.trustedLowCny ?? null;
+  current.strictLowCny = previous.strictLowCny ?? null;
+  current.trustedLowCny = previous.strictLowCny ?? null;
   current.salesCount = previous.salesCount ?? null;
   current.salesSource = previous.salesSource ?? null;
   current.salesCheckedAt = previous.salesCheckedAt ?? null;
   current.stockDepletion7d = previous.stockDepletion7d ?? null;
   const verificationAge = previous.checkedAt ? Date.now() - new Date(previous.checkedAt).getTime() : Infinity;
-  if (verificationAge <= 12 * 60 * 60 * 1000 && previous.verification === "direct" && current.stockStatus !== "out_of_stock") {
+  const priceUnchanged = current.priceCny != null && previous.priceCny != null && Math.abs(current.priceCny - previous.priceCny) < 0.005;
+  if (verificationAge <= 12 * 60 * 60 * 1000 && previous.verification === "direct" && current.stockStatus === "in_stock" && priceUnchanged) {
     current.verification = previous.verification;
     current.checkedAt = previous.checkedAt;
     current.pageCheckStatus = previous.pageCheckStatus ?? "confirmed";
@@ -464,7 +689,11 @@ function mergePrevious(current, previous, now) {
     current.verificationReason = `${previous.verificationReason}（沿用 12 小时内最近原页确认）`;
     current.stockEvidence = "original_page";
     current.availabilityConfidence = 96;
+    current.purchaseEvidence = previous.purchaseEvidence ?? purchaseEvidenceFor({ ...current, checkoutActionConfirmed: true });
+    current.purchaseEvidence.checkoutActionConfirmed = true;
+    current.purchaseStatus = "confirmed";
   }
+  if (current.verification !== "direct") current.purchaseStatus = purchaseStatusFor(current);
   current.lastSeenAt = now;
   return current;
 }
@@ -484,6 +713,8 @@ function applyPageCheck(offer, check) {
     offer.stockEvidence = "original_page";
     offer.freshnessStatus = "live";
     offer.availabilityConfidence = 96;
+    offer.purchaseEvidence = check.purchaseEvidence ?? purchaseEvidenceFor({ ...offer, checkoutActionConfirmed: true });
+    offer.purchaseStatus = "confirmed";
     if (check.observedStockCount != null) offer.stockCount = check.observedStockCount;
     return;
   }
@@ -491,16 +722,20 @@ function applyPageCheck(offer, check) {
     offer.verification = "reachable";
     offer.verificationReason = check.pageCheckReason;
     offer.availabilityConfidence = offer.stockStatus === "in_stock" ? 58 : 45;
+    offer.purchaseEvidence = check.purchaseEvidence ?? offer.purchaseEvidence;
+    offer.purchaseStatus = offer.stockStatus === "out_of_stock" ? "unavailable" : "unverified";
     if (check.observedStockCount != null) offer.stockCount = check.observedStockCount;
     return;
   }
   if (offer.verification === "feed") {
     offer.verificationReason = `${offer.verificationReason} 原页复核未完成：${check.pageCheckReason}`;
+    offer.purchaseStatus = purchaseStatusFor(offer);
     return;
   }
   offer.verification = "failed";
   offer.verificationReason = check.pageCheckReason;
   offer.availabilityConfidence = 18;
+  offer.purchaseStatus = offer.stockStatus === "out_of_stock" ? "unavailable" : "unverified";
 }
 
 function appendObservationHistory(offer, now) {
@@ -508,12 +743,15 @@ function appendObservationHistory(offer, now) {
     const lastPrice = offer.priceHistory.at(-1);
     const oldEnough = !lastPrice || Date.now() - new Date(lastPrice.at).getTime() >= 20 * 60 * 1000;
     if (!lastPrice || lastPrice.priceCny !== offer.priceCny || oldEnough) {
-      offer.priceHistory.push({ at: now, priceCny: offer.priceCny, evidence: offer.verification });
+      offer.priceHistory.push({ at: now, priceCny: offer.priceCny, evidence: offer.verification, purchaseStatus: offer.purchaseStatus });
     }
     offer.priceHistory = offer.priceHistory.slice(-48);
     offer.historicalLowCny = Math.min(...offer.priceHistory.map((point) => point.priceCny));
-    const trusted = offer.priceHistory.filter((point) => ["direct", "feed"].includes(point.evidence ?? ""));
-    offer.trustedLowCny = trusted.length ? Math.min(...trusted.map((point) => point.priceCny)) : null;
+    const channelTrusted = offer.priceHistory.filter((point) => ["confirmed", "channel_candidate"].includes(point.purchaseStatus ?? "") || (!point.purchaseStatus && ["direct", "feed"].includes(point.evidence ?? "")));
+    const strictTrusted = offer.priceHistory.filter((point) => point.purchaseStatus === "confirmed" || (!point.purchaseStatus && point.evidence === "direct"));
+    offer.channelLowCny = channelTrusted.length ? Math.min(...channelTrusted.map((point) => point.priceCny)) : null;
+    offer.strictLowCny = strictTrusted.length ? Math.min(...strictTrusted.map((point) => point.priceCny)) : null;
+    offer.trustedLowCny = offer.strictLowCny;
   }
   if (offer.stockCount != null) {
     const lastStock = offer.stockHistory.at(-1);
@@ -547,27 +785,73 @@ function makeDeltas(offers, previousMap, now) {
     if (previous.stockStatus !== offer.stockStatus && [previous.stockStatus, offer.stockStatus].includes("in_stock")) {
       deltas.push({ id: `delta-${hash(`stock-${offer.id}-${now}`)}`, type: offer.stockStatus === "in_stock" ? "restocked" : "sold_out", merchant: offer.merchant, productName: offer.productName, before: previous.stockStatus === "in_stock" ? "有货" : "无货", after: offer.stockStatus === "in_stock" ? "恢复有货" : "已售罄", at: now });
     }
+    if (previous.purchaseStatus !== offer.purchaseStatus && [previous.purchaseStatus, offer.purchaseStatus].includes("confirmed")) {
+      deltas.push({
+        id: `delta-${hash(`purchase-${offer.id}-${now}`)}`,
+        type: offer.purchaseStatus === "confirmed" ? "purchase_confirmed" : "purchase_unconfirmed",
+        merchant: offer.merchant,
+        productName: offer.productName,
+        before: previous.purchaseStatus === "confirmed" ? "原页确认可购" : "未完成原页确认",
+        after: offer.purchaseStatus === "confirmed" ? "原页确认可购" : "确认已失效",
+        at: now,
+      });
+    }
   }
-  const importance = { restocked: 0, price_down: 1, sold_out: 2, price_up: 3, new: 4 };
+  const importance = { purchase_confirmed: 0, restocked: 1, price_down: 2, purchase_unconfirmed: 3, sold_out: 4, price_up: 5, new: 6 };
   return deltas.sort((a, b) => importance[a.type] - importance[b.type]).slice(0, 80);
+}
+
+function makeSourceDeltas(discovered, previous, now) {
+  const previousDiagnostics = new Map((previous.sourceDiagnostics ?? []).map((item) => [item.id, item]));
+  const deltas = [];
+  for (let index = 0; index < categories.length; index += 1) {
+    const definition = categories[index];
+    const current = discovered[index];
+    const before = previousDiagnostics.get(definition.id);
+    if (!before || before.ok === current.ok) continue;
+    deltas.push({
+      id: `delta-${hash(`source-${definition.id}-${now}`)}`,
+      type: current.ok ? "source_recovered" : "source_failed",
+      merchant: definition.name,
+      productName: "公开数据来源",
+      before: before.ok ? "来源可用" : "来源异常",
+      after: current.ok ? "来源恢复" : "来源异常",
+      at: now,
+    });
+  }
+  return deltas;
 }
 
 async function main() {
   const previous = await readPrevious();
   const previousMap = new Map((previous.offers ?? []).map((offer) => [offer.id, offer]));
   const now = new Date().toISOString();
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ locale: "zh-CN", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36" });
-  let discovered = [];
-  try {
-    discovered = await mapLimit(categories, discoveryConcurrency, async (definition) => {
-      const result = await discoverCategory(context, definition);
-      process.stdout.write(`${definition.id}: ${result.ok ? `${result.offers.length}/${result.total} direct rows after ${result.clickCount} load clicks` : `failed (${result.error})`}\n`);
-      return result;
-    });
-  } finally {
-    await context.close();
-    await browser.close();
+  const discovered = await mapLimit(categories, discoveryConcurrency, (definition) => discoverCategoryFromApi(definition));
+  const failedIndexes = discovered.map((result, index) => result.ok ? -1 : index).filter((index) => index >= 0);
+  if (failedIndexes.length) {
+    let browser;
+    let context;
+    try {
+      browser = await chromium.launch({ headless: true });
+      context = await browser.newContext({ locale: "zh-CN", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36" });
+      const fallbacks = await mapLimit(failedIndexes, discoveryConcurrency, (index) => discoverCategoryFromPage(context, categories[index]));
+      fallbacks.forEach((fallback, position) => {
+        const index = failedIndexes[position];
+        const primaryError = discovered[index].error;
+        discovered[index] = fallback.ok
+          ? { ...fallback, primaryError }
+          : { ...fallback, primaryError, error: `结构化接口：${primaryError || "失败"}；页面回退：${fallback.error || "失败"}`.slice(0, 240) };
+      });
+    } catch (error) {
+      for (const index of failedIndexes) discovered[index].error = `结构化接口：${discovered[index].error || "失败"}；页面回退不可用：${safeError(error)}`.slice(0, 240);
+    } finally {
+      if (context) await context.close();
+      if (browser) await browser.close();
+    }
+  }
+  for (let index = 0; index < categories.length; index += 1) {
+    const result = discovered[index];
+    process.stdout.write(`${categories[index].id}: ${result.ok ? `${result.offers.length}/${result.total} rows via ${result.transport}${result.complete ? "" : " (partial)"}` : `failed (${result.error})`}\n`);
   }
 
   const offers = [];
@@ -588,14 +872,25 @@ async function main() {
   const categoryPayload = categories.map((definition, index) => {
     const result = discovered[index];
     const categoryOffers = offers.filter((offer) => offer.categoryId === definition.id);
-    const prices = categoryOffers.filter((offer) => offer.stockStatus === "in_stock" && offer.priceCny != null).map((offer) => offer.priceCny);
+    const comparableForms = definition.id === "chatgpt-plus"
+      ? new Set(["finished_account", "web_account"])
+      : definition.id === "chatgpt-team-business"
+        ? new Set(["finished_account", "seat_membership"])
+        : null;
+    const comparable = categoryOffers.filter((offer) => !comparableForms || comparableForms.has(offer.productForm));
+    const candidatePrices = comparable.filter((offer) => ["confirmed", "channel_candidate"].includes(offer.purchaseStatus) && offer.priceCny != null).map((offer) => offer.priceCny);
+    const strictPrices = comparable.filter((offer) => offer.purchaseStatus === "confirmed" && offer.priceCny != null).map((offer) => offer.priceCny);
+    const finishedAccountPrices = categoryOffers.filter((offer) => offer.productForm === "finished_account" && ["confirmed", "channel_candidate"].includes(offer.purchaseStatus) && offer.priceCny != null).map((offer) => offer.priceCny);
     return {
       id: definition.id, name: definition.name, shortName: definition.shortName, description: definition.description, tags: definition.tags,
-      offerCount: result.total, inStockCount: result.inStock,
-      verifiedCount: categoryOffers.filter((offer) => ["direct", "feed"].includes(offer.verification) && offer.stockStatus === "in_stock").length,
-      directVerifiedCount: categoryOffers.filter((offer) => offer.verification === "direct" && offer.stockStatus === "in_stock").length,
-      feedVerifiedCount: categoryOffers.filter((offer) => offer.verification === "feed" && offer.stockStatus === "in_stock").length,
-      floorPriceCny: prices.length ? Math.min(...prices) : null,
+      offerCount: Math.max(result.total, categoryOffers.length), loadedCount: categoryOffers.length, inStockCount: result.inStock, sourceComplete: Boolean(result.complete),
+      verifiedCount: categoryOffers.filter((offer) => ["confirmed", "channel_candidate"].includes(offer.purchaseStatus)).length,
+      directVerifiedCount: categoryOffers.filter((offer) => offer.purchaseStatus === "confirmed").length,
+      feedVerifiedCount: categoryOffers.filter((offer) => offer.purchaseStatus === "channel_candidate").length,
+      floorPriceCny: candidatePrices.length ? Math.min(...candidatePrices) : null,
+      channelFloorPriceCny: candidatePrices.length ? Math.min(...candidatePrices) : null,
+      strictFloorPriceCny: strictPrices.length ? Math.min(...strictPrices) : null,
+      finishedAccountFloorPriceCny: finishedAccountPrices.length ? Math.min(...finishedAccountPrices) : null,
     };
   });
 
@@ -605,17 +900,20 @@ async function main() {
   const failedVerifications = offers.filter((offer) => offer.verification === "failed").length;
   const blockedDomains = [...domainState.entries()].filter(([, state]) => state.blocks >= 2).map(([domain, state]) => ({ domain, blockedChecks: state.blocks, skippedChecks: state.skipped }));
   const payload = {
-    schemaVersion: 4,
+    schemaVersion: 5,
     generatedAt: now,
     runId: `run-${now.slice(0, 13).replace(/[-T:]/g, "")}-${hash(String(offers.length), 4)}`,
     sourceWindow: `${categories.length - failedDirectories}/${categories.length} 个目录完成 · 本轮抽查 ${targetOffers.length} 个原商品页`,
     coverage: {
-      listedOffers: categoryPayload.reduce((sum, category) => sum + category.offerCount, 0),
+      listedOffers: Math.max(categoryPayload.reduce((sum, category) => sum + category.offerCount, 0), offers.length),
       loadedOffers: offers.length,
       uniqueMerchants,
       inStock: offers.filter((offer) => offer.stockStatus === "in_stock").length,
-      directVerified: offers.filter((offer) => offer.verification === "direct").length,
-      feedVerified: offers.filter((offer) => offer.verification === "feed" && offer.stockStatus === "in_stock").length,
+      directVerified: offers.filter((offer) => offer.purchaseStatus === "confirmed").length,
+      strictPurchasable: offers.filter((offer) => offer.purchaseStatus === "confirmed").length,
+      feedVerified: offers.filter((offer) => offer.purchaseStatus === "channel_candidate").length,
+      channelCandidates: offers.filter((offer) => offer.purchaseStatus === "channel_candidate").length,
+      finishedAccounts: offers.filter((offer) => offer.productForm === "finished_account").length,
       reachable: offers.filter((offer) => offer.verification === "reachable").length,
       freshOffers: offers.filter((offer) => ["live", "fresh"].includes(offer.freshnessStatus)).length,
       staleOffers: offers.filter((offer) => offer.freshnessStatus === "stale").length,
@@ -623,23 +921,34 @@ async function main() {
       domains,
       failedSources: failedDirectories + failedVerifications,
       blockedDomains: blockedDomains.length,
+      activeSources: discovered.filter((result) => result.ok).length,
+      completeSources: discovered.filter((result) => result.ok && result.complete).length,
+      partialSources: discovered.filter((result) => result.ok && !result.complete).length,
     },
     categories: categoryPayload,
     offers: offers.sort((a, b) => a.categoryId.localeCompare(b.categoryId) || (a.priceCny ?? Infinity) - (b.priceCny ?? Infinity)),
-    deltas: makeDeltas(offers, previousMap, now),
+    deltas: [...makeSourceDeltas(discovered, previous, now), ...makeDeltas(offers, previousMap, now)].slice(0, 80),
     sourceDiagnostics: categories.map((definition, index) => ({
       id: definition.id,
-      source: "public_directory",
+      source: priceAiAdapterMeta.id,
+      transport: discovered[index].transport,
       ok: discovered[index].ok,
       offersLoaded: discovered[index].offers.length,
       listedOffers: discovered[index].total,
       loadClicks: discovered[index].clickCount,
+      pageCount: discovered[index].pageCount ?? 0,
+      requestCount: discovered[index].requestCount ?? discovered[index].pageCount ?? 0,
+      complete: Boolean(discovered[index].complete),
+      completeness: discovered[index].total ? Math.min(1, discovered[index].offers.length / discovered[index].total) : 0,
+      sourceGeneratedAt: discovered[index].sourceGeneratedAt ?? null,
+      primaryError: discovered[index].primaryError ?? null,
       error: discovered[index].error,
     })),
     domainDiagnostics: blockedDomains,
     notices: [
       "渠道报价可能包含同一商家多规格、同名报价组或同平台多店铺，不等于相同数量的独立商家。",
-      "渠道新鲜代表上游目录最近返回库存；原页确认代表同页识别到商品、价格、正库存与下单动作。两者不会混为一谈。",
+      "渠道候选代表公开结构化接口最近返回套餐、价格、明确库存与原商家入口；严格可购还要求原商品页同页确认下单动作。两者不会混为一谈。",
+      "Plus 与 Business 的成品号、席位、网页号、镜像站、拼车和充值已拆分为不同商品形态，最低价不会再跨形态混算。",
       "销量只在原商品页明确披露时记录；否则展示基于库存历史下降的估算，并明确标为估算。",
       `${failedDirectories} 个公开目录、${failedVerifications} 个原商品页本轮访问失败；失败记录不会推断为有货。`,
     ],

@@ -41,13 +41,21 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .catalog-cache/catalog.json
-          key: catalog-v4-${{ github.run_id }}
+          key: catalog-v5-${{ github.run_id }}
           restore-keys: |
-            catalog-v4-
+            catalog-v5-
 
       - name: Seed crawler from previous deployment
         if: steps.catalog-cache.outputs.cache-matched-key != ''
         run: cp .catalog-cache/catalog.json public/data/catalog.json
+
+      - name: Recover history from current Pages deployment
+        if: steps.catalog-cache.outputs.cache-matched-key == ''
+        run: |
+          curl --fail --silent --show-error --location --max-time 30 \
+            "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/data/catalog.json" \
+            --output /tmp/deployed-catalog.json || true
+          node -e "const fs=require('fs');const p='/tmp/deployed-catalog.json';if(fs.existsSync(p)){const d=JSON.parse(fs.readFileSync(p));if(Array.isArray(d.offers)&&d.offers.length)fs.copyFileSync(p,'public/data/catalog.json')}"
 
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
@@ -59,6 +67,8 @@ jobs:
           CATALOG_MAX_VERIFY: 320
           CATALOG_VERIFY_CONCURRENCY: 8
           CATALOG_DISCOVERY_CONCURRENCY: 2
+          CATALOG_API_CONCURRENCY: 4
+          CATALOG_MAX_API_PAGES: 80
           CATALOG_FEED_FRESH_HOURS: 6
           CATALOG_PAGE_TIMEOUT_MS: 11000
 
@@ -76,7 +86,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .catalog-cache/catalog.json
-          key: catalog-v4-${{ github.run_id }}
+          key: catalog-v5-${{ github.run_id }}
 
       - name: Build static site
         run: npm run build

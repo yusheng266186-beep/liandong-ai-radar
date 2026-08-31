@@ -49,6 +49,33 @@ for (const profile of [
   await page.locator("#catalog").scrollIntoViewIfNeeded();
   await page.waitForTimeout(200);
   await page.screenshot({ path: path.join(output, `${profile.name}-catalog.png`), fullPage: false });
+  const interactions = { detail: false, compare: false, filters: profile.name !== "mobile" };
+  const interactionErrors = [];
+  try {
+    if (profile.name === "mobile") {
+      await page.locator(".mobile-filter-button").click();
+      await page.locator(".mobile-filter-overlay").waitFor({ state: "visible" });
+      interactions.filters = true;
+      await page.keyboard.press("Escape");
+      await page.locator(".offer-mobile-card .mobile-card-title").first().click();
+    } else {
+      await page.locator(".offer-table .merchant-button").first().click();
+    }
+    await page.locator(".detail-modal").waitFor({ state: "visible" });
+    interactions.detail = true;
+    await page.keyboard.press("Escape");
+
+    const compareButtons = page.locator(profile.name === "mobile" ? ".offer-mobile-card .compare-check" : ".offer-table tbody .compare-check");
+    await compareButtons.nth(0).click();
+    await compareButtons.nth(1).click();
+    await page.locator(".compare-now").click();
+    await page.locator(".compare-modal").waitFor({ state: "visible" });
+    interactions.compare = true;
+    await page.keyboard.press("Escape");
+  } catch (error) {
+    interactionErrors.push(error instanceof Error ? error.message : String(error));
+  }
+  await page.waitForTimeout(100);
   const layoutAudit = await page.evaluate(() => {
     const audited = [...document.querySelectorAll(".topbar, .command-hero, .health-panel, .evidence-strip, .catalog-toolbar, .result-bar, .pagination, .method-section, .site-footer")];
     const clippedContainers = audited.filter((element) => element.scrollWidth > element.clientWidth + 2).map((element) => ({ className: element.className, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }));
@@ -69,6 +96,8 @@ for (const profile of [
     offers: await page.locator(profile.name === "mobile" ? ".offer-mobile-card" : ".offer-table tbody tr").count(),
     horizontalOverflow: await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth),
     ...layoutAudit,
+    interactions,
+    interactionErrors,
     consoleErrors,
     pageErrors,
   });
@@ -77,4 +106,4 @@ for (const profile of [
 await browser.close();
 if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
-if (results.some((result) => result.horizontalOverflow || result.consoleErrors.length || result.pageErrors.length || result.clippedContainers.length || result.tinyControls.length)) process.exitCode = 1;
+if (results.some((result) => result.horizontalOverflow || result.consoleErrors.length || result.pageErrors.length || result.interactionErrors.length || result.clippedContainers.length || result.tinyControls.length)) process.exitCode = 1;
