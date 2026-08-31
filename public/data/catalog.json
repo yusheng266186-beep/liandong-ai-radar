@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 3,
+  "generatedAt": "2026-08-31T03:10:00.000Z",
+  "runId": "seed-20260831-verified",
+  "sourceWindow": "8/8 个公开目录快照 · 种子数据等待首次自动扩展",
+  "coverage": {
+    "listedOffers": 2457,
+    "loadedOffers": 16,
+    "uniqueMerchants": 15,
+    "inStock": 16,
+    "directVerified": 2,
+    "reachable": 5,
+    "domains": 11,
+    "failedSources": 5
+  },
+  "categories": [
+    { "id": "chatgpt-plus", "name": "Plus 试用 / 成品号", "shortName": "PLUS", "description": "日抛、网页号、已接码与未接码成品号", "tags": ["成品号", "网页号", "接码"], "offerCount": 1108, "inStockCount": 219, "verifiedCount": 0, "floorPriceCny": 10.82 },
+    { "id": "chatgpt-team-business", "name": "Team / Business", "shortName": "TEAM", "description": "K12、Bug Team、母号、子号与席位邀请", "tags": ["席位", "邀请", "K12"], "offerCount": 279, "inStockCount": 96, "verifiedCount": 0, "floorPriceCny": 15 },
+    { "id": "chatgpt-plus-recharge", "name": "Plus 正价代充", "shortName": "RECHARGE", "description": "官方渠道、菲区卡充、iOS 与正规代充", "tags": ["代充", "CDK", "质保"], "offerCount": 253, "inStockCount": 202, "verifiedCount": 1, "floorPriceCny": 111 },
+    { "id": "chatgpt-free-account", "name": "ChatGPT 普号", "shortName": "FREE", "description": "Free 白号、普通账号与 2FA 成品号", "tags": ["普号", "2FA", "批发"], "offerCount": 217, "inStockCount": 155, "verifiedCount": 0, "floorPriceCny": 0.22 },
+    { "id": "chatgpt-go", "name": "ChatGPT Go", "shortName": "GO", "description": "Go 月卡、年卡、激活码与自助充值", "tags": ["月卡", "卡密", "充值"], "offerCount": 31, "inStockCount": 24, "verifiedCount": 1, "floorPriceCny": 33 },
+    { "id": "chatgpt-pro-20x", "name": "ChatGPT Pro 20x", "shortName": "PRO 20X", "description": "高额度、短期速刷、成品号与正规代开", "tags": ["高额度", "速刷", "代开"], "offerCount": 293, "inStockCount": 227, "verifiedCount": 0, "floorPriceCny": 270 },
+    { "id": "chatgpt-pro-5x", "name": "ChatGPT Pro 5x", "shortName": "PRO 5X", "description": "Pro 5x 成品、iOS 卡密与官方渠道代充", "tags": ["iOS", "卡密", "代充"], "offerCount": 229, "inStockCount": 182, "verifiedCount": 0, "floorPriceCny": 590.84 },
+    { "id": "chatgpt-services", "name": "周边与自助服务", "shortName": "SERVICES", "description": "提链、扫码、自助充值、邀请与额度服务", "tags": ["提链", "扫码", "邀请"], "offerCount": 47, "inStockCount": 33, "verifiedCount": 0, "floorPriceCny": 1.01 }
+  ],
+  "offers": [
+    {
+      "id": "offer-plus-aihuoyuan", "categoryId": "chatgpt-plus", "categoryName": "Plus 试用 / 成品号", "merchant": "AI货源", "productName": "8.30 go pay GPlus 日抛账号 MAP", "priceCny": 10.82, "previousPriceCny": null, "historicalLowCny": null,
+      "stockStatus": "in_stock", "stockCount": 17, "purchaseUrl": "https://www.ldxp.cn/item/cehjp4", "shopUrl": "https://www.ldxp.cn/shop/FNWSXAIS", "domain": "ldxp.cn", "updatedAt": "2026-08-31T10:39:00+08:00", "checkedAt": "2026-08-31T03:08:00.000Z", "verification": "failed", "verificationReason": "原站返回 WAF 验证页，本轮不能确认库存。", "deliveryType": "成品账号", "tags": ["成品号", "速刷"], "minPurchase": null, "firstSeenAt": "2026-08-31T03:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": []
+    },
+    {
+      "id": "offer-plus-xiaopiao", "categoryId": "chatgpt-plus", "categoryName": "Plus 试用 / 成品号", "merchant": "小票的 AI 小铺", "productName": "Plus 成品号，反代专用，买错不退", "priceCny": 16.48, "previousPriceCny": null, "historicalLowCny": null,
+      "stockStatus": "in_stock", "stockCount": 99, "purchaseUrl": "https://www.ldxp.cn/item/i8e73h", "shopUrl": "https://www.ldxp.cn/shop/xiaopiao", "domain": "ldxp.cn", "updatedAt": "2026-08-31T10:36:00+08:00", "checkedAt": "2026-08-31T03:08:00.000Z", "verification": "failed", "verificationReason": "原站返回 WAF 验证页，本轮不能确认库存。", "deliveryType": "成品账号", "tags": ["成品号", "网页号"], "minPurchase": null, "firstSeenAt": "2026-08-31T03:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": []
+    },
+    {
+      "id": "offer-plus-yingying", "categoryId": "chatgpt-plus", "categoryName": "Plus 试用 / 成品号", "merchant": "鹰鹰小铺", "productName": "G PLUS 成品已接码，sub2 格式", "priceCny": 17.51, "previousPriceCny": null, "historicalLowCny": null,
+      "stockStatus": "in_stock", "stockCount": 99, "purchaseUrl": "https://www.ldxp.cn/item/o5gaog", "shopUrl": "https://www.ldxp.cn/shop/GUEOI7Z9", "domain": "ldxp.cn", "updatedAt": "2026-08-31T10:35:00+08:00", "checkedAt": "2026-08-31T03:08:00.000Z", "verification": "failed", "verificationReason": "原站返回 WAF 验证页，本轮不能确认库存。", "deliveryType": "成品账号", "tags": ["成品号", "已接码"], "minPurchase": null, "firstSeenAt": "2026-08-31T03:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": []
+    },
+    {
+      "id": "offer-team-qingwa", "categoryId": "chatgpt-team-business", "categoryName": "Team / Business", "merchant": "青蛙AI·低价源头", "productName": "周限制无 5H 限制 Team，质保下单后 4 小时", "priceCny": 15, "previousPriceCny": null, "historicalLowCny": null,
+      "stockStatus": "in_stock", "stockCount": 187, "purchaseUrl": "https://www.ldxp.cn/item/l1yi35", "shopUrl": "https://www.ldxp.cn/shop/qingwaAA", "domain": "ldxp.cn", "updatedAt": "2026-08-31T09:28:00+08:00", "checkedAt": "2026-08-31T03:08:00.000Z", "verification": "failed", "verificationReason": "原站返回 WAF 验证页，本轮不能确认库存。", "deliveryType": "席位邀请", "tags": ["席位", "质保"], "minPurchase": null, "firstSeenAt": "2026-08-31T03:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": []
+    },
+    {
+      "id": "offer-recharge-cc", "categoryId": "chatgpt-plus-recharge", "categoryName": "Plus 正价代充", "merchant": "CC卡网", "productName": "官方充值 / 正价代充 Plus CDK 菲区", "priceCny": 111, "previousPriceCny": null, "historicalLowCny": null,
+      "stockStatus": "in_stock", "stockCount": 9, "purchaseUrl": "https://cccrad.uk/products/gpt-plus", "shopUrl": "https://cccrad.uk/", "domain": "cccrad.uk", "updatedAt": "2026-08-31T10:20:00+08:00", "checkedAt": "2026-08-31T03:08:00.000Z", "verification": "reachable", "verificationReason": "原商品页可访问，但公开响应不足以同时确认价格、库存和下单动作。", "deliveryType": "卡密 / CDK", "tags": ["代充", "CDK", "自动发货", "质保", "官方渠道"], "minPurchase": null, "firstSeenAt": "2026-08-31T03:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": []
+    },
+    {
+      "id": "offer-recharge-dn", "categoryId": "chatgpt-plus-recharge", "categoryName": "Plus 正价代充", "merchant": "DN发卡网", "productName": "PLUS 菲律宾自助充值卡密，到期使用不可覆盖", "priceCny": 111, "previousPriceCny": null, "historicalLowCny": null,
+      "stockStatus": "in_stock", "stockCount": null, "purchaseUrl": "https://shopcardai.click/item/1", "shopUrl": "https://shopcardai.click/", "domain": "shopcardai.click", "updatedAt": "2026-08-31T10:05:00+08:00", "checkedAt": "2026-08-31T03:08:00.000Z", "verification": "reachable", "verificationReason": "原商品页显示 In Stock 与购买表单，但公开响应中未同时识别价格，未提升为原页确认。", "deliveryType": "卡密 / CDK", "tags": ["代充", "CDK", "自动发货", "质保"], "minPurchase": null, "firstSeenAt": "2026-08-31T03:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": []
+    },
+    {
+      "id": "offer-4115ab19d110e7", "categoryId": "chatgpt-plus-recharge", "categoryName": "Plus 正价代充", "merchant": "SULANJUN AI STORE", "productName": "菲区 GPT Plus 一个月充值，24 小时自动化充值", "priceCny": 115, "previousPriceCny": 115, "historicalLowCny": 115,
+      "stockStatus": "in_stock", "stockCount": 9, "purchaseUrl": "https://sulanjun.cc/?post=3", "shopUrl": "https://sulanjun.cc/", "domain": "sulanjun.cc", "updatedAt": "2026-08-31T10:20:00+08:00", "checkedAt": "2026-08-31T03:08:00.000Z", "verification": "direct", "verificationReason": "原商品页显示 ¥115、库存 9、自动发货与立即购买动作，且未发现售罄信号。", "deliveryType": "自助充值", "tags": ["代充", "CDK", "自动发货", "官方渠道"], "minPurchase": null, "firstSeenAt": "2026-08-31T02:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": [{ "at": "2026-08-31T02:08:00.000Z", "priceCny": 115 }, { "at": "2026-08-31T03:08:00.000Z", "priceCny": 115 }]
+    },
+    {
+      "id": "offer-recharge-morimm", "categoryId": "chatgpt-plus-recharge", "categoryName": "Plus 正价代充", "merchant": "小恐龙发卡网", "productName": "ChatGPT PLUS 菲区正规代充", "priceCny": 115, "previousPriceCny": null, "historicalLowCny": null,
+      "stockStatus": "in_stock", "stockCount": 1, "purchaseUrl": "https://morimm.com/products/gptplus", "shopUrl": "https://morimm.com/", "domain": "morimm.com", "updatedAt": "2026-08-31T10:20:00+08:00", "checkedAt": "2026-08-31T03:08:00.000Z", "verification": "reachable", "verificationReason": "原商品链接可访问，但公开响应未返回足够的价格与库存证据。", "deliveryType": "人工代充", "tags": ["代充", "质保", "官方渠道"], "minPurchase": null, "firstSeenAt": "2026-08-31T03:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": []
+    },
+    {
+      "id": "offer-recharge-whh", "categoryId": "chatgpt-plus-recharge", "categoryName": "Plus 正价代充", "merchant": "王哈哈Ai", "productName": "ChatGPT Plus 正价订阅 [菲区] CDK", "priceCny": 115, "previousPriceCny": null, "historicalLowCny": null,
+      "stockStatus": "in_stock", "stockCount": 248, "purchaseUrl": "https://shop.whh985.com/products/plus", "shopUrl": "https://shop.whh985.com/", "domain": "shop.whh985.com", "updatedAt": "2026-08-31T10:20:00+08:00", "checkedAt": null, "verification": "indexed", "verificationReason": "公开目录已收录，等待原商品页轮询核验。", "deliveryType": "卡密 / CDK", "tags": ["代充", "CDK", "官方渠道"], "minPurchase": null, "firstSeenAt": "2026-08-31T03:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": []
+    },
+    {
+      "id": "offer-go-aisou-india", "categoryId": "chatgpt-go", "categoryName": "ChatGPT Go", "merchant": "Aisou智充", "productName": "GPT Go 充值月卡卡密（印区卡付）", "priceCny": 33, "previousPriceCny": null, "historicalLowCny": null,
+      "stockStatus": "in_stock", "stockCount": 85, "purchaseUrl": "https://aisou.pro/item/29", "shopUrl": "https://aisou.pro/", "domain": "aisou.pro", "updatedAt": "2026-08-31T09:35:00+08:00", "checkedAt": "2026-08-31T03:08:00.000Z", "verification": "reachable", "verificationReason": "原商品页显示自动发货、库存 85 与付款表单，但公开响应未同时识别页面价格。", "deliveryType": "卡密 / CDK", "tags": ["CDK", "自动发货", "质保"], "minPurchase": null, "firstSeenAt": "2026-08-31T03:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": []
+    },
+    {
+      "id": "offer-452a4364360cbb", "categoryId": "chatgpt-go", "categoryName": "ChatGPT Go", "merchant": "麦门商店", "productName": "ChatGPT Go 1 个月正规 iOS 自助充值", "priceCny": 39, "previousPriceCny": 39, "historicalLowCny": 39,
+      "stockStatus": "in_stock", "stockCount": 7, "purchaseUrl": "https://ouvg.top/buy/286", "shopUrl": "https://ouvg.top/", "domain": "ouvg.top", "updatedAt": "2026-08-31T09:35:00+08:00", "checkedAt": "2026-08-31T03:08:00.000Z", "verification": "direct", "verificationReason": "原商品页显示价格 ¥39、库存 7、自动发货与下单动作，且未发现售罄信号。", "deliveryType": "自助充值", "tags": ["代充", "自动发货", "质保", "iOS", "官方渠道"], "minPurchase": null, "firstSeenAt": "2026-08-31T02:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": [{ "at": "2026-08-31T02:08:00.000Z", "priceCny": 39 }, { "at": "2026-08-31T03:08:00.000Z", "priceCny": 39 }]
+    },
+    {
+      "id": "offer-go-xiaojiu", "categoryId": "chatgpt-go", "categoryName": "ChatGPT Go", "merchant": "小久", "productName": "印区卡冲 GPT Go，质保一个月", "priceCny": 35.63, "previousPriceCny": null, "historicalLowCny": null,
+      "stockStatus": "in_stock", "stockCount": 184, "purchaseUrl": "https://catfk.com/item/pdpdjv", "shopUrl": "https://catfk.com/shop/xiaojiu", "domain": "catfk.com", "updatedAt": "2026-08-31T09:08:00+08:00", "checkedAt": null, "verification": "indexed", "verificationReason": "公开目录已收录，等待原商品页轮询核验。", "deliveryType": "卡密 / CDK", "tags": ["CDK", "质保", "自动发货"], "minPurchase": null, "firstSeenAt": "2026-08-31T03:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": []
+    },
+    {
+      "id": "offer-pro20-taiyi", "categoryId": "chatgpt-pro-20x", "categoryName": "ChatGPT Pro 20x", "merchant": "太一的店铺", "productName": "速刷 Pro 20x 首登", "priceCny": 288.4, "previousPriceCny": null, "historicalLowCny": null,
+      "stockStatus": "in_stock", "stockCount": 2, "purchaseUrl": "https://www.ldxp.cn/item/v1lcth", "shopUrl": "https://www.ldxp.cn/shop/IHWX6MX8", "domain": "ldxp.cn", "updatedAt": "2026-08-31T08:57:00+08:00", "checkedAt": "2026-08-31T03:08:00.000Z", "verification": "failed", "verificationReason": "原站返回 WAF 验证页，本轮不能确认库存。", "deliveryType": "成品账号", "tags": ["成品号", "速刷"], "minPurchase": null, "firstSeenAt": "2026-08-31T03:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": []
+    },
+    {
+      "id": "offer-pro5-aisou", "categoryId": "chatgpt-pro-5x", "categoryName": "ChatGPT Pro 5x", "merchant": "Aisou智充", "productName": "GPT 5X PRO 充值卡密（iOS 美区质保）", "priceCny": 610, "previousPriceCny": null, "historicalLowCny": null,
+      "stockStatus": "in_stock", "stockCount": 8, "purchaseUrl": "https://aisou.pro/item/46", "shopUrl": "https://aisou.pro/", "domain": "aisou.pro", "updatedAt": "2026-08-31T10:35:00+08:00", "checkedAt": "2026-08-31T03:08:00.000Z", "verification": "reachable", "verificationReason": "原商品页显示自动发货、库存 8 与付款表单，但公开响应未同时识别页面价格。", "deliveryType": "卡密 / CDK", "tags": ["CDK", "自动发货", "质保", "iOS", "官方渠道"], "minPurchase": null, "firstSeenAt": "2026-08-31T03:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": []
+    },
+    {
+      "id": "offer-pro5-redeem", "categoryId": "chatgpt-pro-5x", "categoryName": "ChatGPT Pro 5x", "merchant": "86 RedeemGPT", "productName": "1 个月 GPT PRO 5x 代充，100 刀 iOS 订阅", "priceCny": 620, "previousPriceCny": null, "historicalLowCny": null,
+      "stockStatus": "in_stock", "stockCount": null, "purchaseUrl": "https://faka.redeemgpt.com/item/83", "shopUrl": "https://faka.redeemgpt.com/", "domain": "faka.redeemgpt.com", "updatedAt": "2026-08-31T10:35:00+08:00", "checkedAt": null, "verification": "indexed", "verificationReason": "公开目录已收录，等待原商品页轮询核验。", "deliveryType": "人工代充", "tags": ["代充", "自动发货", "质保", "iOS", "官方渠道"], "minPurchase": null, "firstSeenAt": "2026-08-31T03:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": []
+    },
+    {
+      "id": "offer-pro5-cool", "categoryId": "chatgpt-pro-5x", "categoryName": "ChatGPT Pro 5x", "merchant": "晴天小店", "productName": "GPT Pro 100 美金版本，iOS 美区人工交付", "priceCny": 640, "previousPriceCny": null, "historicalLowCny": null,
+      "stockStatus": "in_stock", "stockCount": 43, "purchaseUrl": "https://cool.cheggnow.com/item/36", "shopUrl": "https://cool.cheggnow.com/", "domain": "cool.cheggnow.com", "updatedAt": "2026-08-31T10:35:00+08:00", "checkedAt": null, "verification": "indexed", "verificationReason": "公开目录已收录，等待原商品页轮询核验。", "deliveryType": "人工代充", "tags": ["代充", "质保", "iOS", "官方渠道"], "minPurchase": null, "firstSeenAt": "2026-08-31T03:00:00.000Z", "lastSeenAt": "2026-08-31T03:10:00.000Z", "priceHistory": []
+    }
+  ],
+  "deltas": [],
+  "notices": [
+    "当前种子快照来自 2026-08-31 的公开目录与原商品页抽查，首次 GitHub Actions 运行后会自动扩展明细。",
+    "渠道报价可能包含同一商家多规格、同名报价组或同平台多店铺，不等于相同数量的独立商家。",
+    "原页确认只代表核验时识别到价格、正库存与下单动作，不构成对第三方履约或售后的担保。"
+  ]
+}
