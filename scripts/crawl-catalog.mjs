@@ -83,6 +83,16 @@ async function readPrevious() {
   try { return JSON.parse(await readFile(outputPath, "utf8")); } catch { return { offers: [], categories: [], deltas: [] }; }
 }
 
+async function visibleLoadButton(page) {
+  const buttons = page.getByRole("button", { name: /继续加载报价/ });
+  const count = await buttons.count();
+  for (let index = 0; index < count; index += 1) {
+    const candidate = buttons.nth(index);
+    if (await candidate.isVisible().catch(() => false)) return candidate;
+  }
+  return null;
+}
+
 async function discoverCategory(context, definition) {
   const page = await context.newPage();
   try {
@@ -91,13 +101,17 @@ async function discoverCategory(context, definition) {
     let clickCount = 0;
     let stagnant = 0;
     while (clickCount < maxLoadClicks && stagnant < 3) {
-      const button = page.getByRole("button", { name: /继续加载报价/ }).last();
-      if (!(await button.isVisible().catch(() => false))) break;
+      const button = await visibleLoadButton(page);
+      if (!button) break;
       const before = await page.locator("table tbody tr").count();
+      const beforeLabel = (await button.textContent().catch(() => "")) ?? "";
+      await button.scrollIntoViewIfNeeded().catch(() => undefined);
       await button.click({ timeout: 12_000 }).catch(() => undefined);
-      await page.waitForTimeout(650);
+      await page.waitForTimeout(900);
       const after = await page.locator("table tbody tr").count();
-      stagnant = after > before ? 0 : stagnant + 1;
+      const nextButton = await visibleLoadButton(page);
+      const afterLabel = nextButton ? ((await nextButton.textContent().catch(() => "")) ?? "") : "complete";
+      stagnant = after > before || afterLabel !== beforeLabel ? 0 : stagnant + 1;
       clickCount += 1;
     }
 
@@ -301,7 +315,7 @@ async function main() {
   try {
     for (const definition of categories) {
       const result = await discoverCategory(context, definition);
-      process.stdout.write(`${definition.id}: ${result.ok ? `${result.offers.length}/${result.total}` : `failed (${result.error})`}\n`);
+      process.stdout.write(`${definition.id}: ${result.ok ? `${result.offers.length}/${result.total} direct rows after ${result.clickCount} load clicks` : `failed (${result.error})`}\n`);
       discovered.push(result);
     }
   } finally {
